@@ -64,6 +64,10 @@ if ~config.preprocess
     script_log = [script_log, str]; 
     dispfun(str, config.verbose ==2);
 
+	if ~isempty(config.movie_mask)
+		M = bsxfun(@times, M, config.movie_mask);
+	end
+
 else
 
     % Preprocess movie
