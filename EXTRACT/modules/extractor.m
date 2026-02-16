@@ -259,6 +259,10 @@ if config.parallel_cpu || config.multi_gpu
             S_init = config.S_init(fov_occupation(:), :);
             S_init(:, sum(S_init, 1)<=ABS_TOL) = [];
             config_this.S_init = S_init;
+            if isempty(S_init)
+                dispfun(sprintf('\t \t \t Skipping the partition, no cells. \n'), config.verbose == 2);
+                continue
+            end
         end
 
         % If T_init is given, feed only part of it consistent with partition
@@ -397,6 +401,10 @@ else
             S_init = config.S_init(fov_occupation(:), :);
             S_init(:, sum(S_init, 1)<=ABS_TOL) = [];
             config_this.S_init = S_init;
+            if isempty(S_init)
+                dispfun(sprintf('\t \t \t Skipping the partition, no cells. \n'), config.verbose == 2);
+                continue
+            end
         end
         % If T_init is given, feed only part of it consistent with partition
         if ~isempty(config_this.T_init) && ~isempty(config_this.S_init)
