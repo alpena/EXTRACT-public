@@ -1,0 +1,11 @@
+*.m~
+*.h5
+*.hdf5
+*.tif
+*.tiff
+1pMCRI-demo/
+*.mat
+*.eps
+.*
+*.mat
+*.eps
