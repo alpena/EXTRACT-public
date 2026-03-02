@@ -2,11 +2,11 @@
 % Edit only the parameters in this section before running.
 tiff_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
     '1pMCRI-demo', '250206-UK6-1-F=4_power=5mW_reg_crop.tiff');
-quick_n_frames = 1000;
+quick_n_frames = inf;
 avg_cell_radius = 6;
 gpu_id = 1;
 save_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    'tests', 'test_1pMCRI_output.mat');
+    'tests', 'test_1pMCRI_output_full.mat');
 
 %% Initialize paths from repo root
 script_dir = fileparts(mfilename('fullpath'));
@@ -42,15 +42,20 @@ M = read_tiff_stack_subset(tiff_path, 1, n_frames, tiff_info);
 config = get_defaults([]);
 config.preprocess = true;
 config.use_gpu = true;
-config.multi_gpu = false;
-config.pick_gpu = gpu_id;
-config.use_default_gpu = false;
-config.num_partitions_x = 1;
-config.num_partitions_y = 1;
+% config.multi_gpu = false;
+% config.pick_gpu = gpu_id;
+% config.use_default_gpu = false;
+% config.num_partitions_x = 1;
+% config.num_partitions_y = 1;
+config.downsample_time_by = 5;
 config.avg_cell_radius = avg_cell_radius;
-config.cellfind_max_steps = 120;
+% config.cellfind_max_steps = 2000;
 config.max_iter = 6;
 config.verbose = 2;
+config.thresholds.eccent_thresh = 2;
+config.thresholds.size_lower_limit = 0.2;
+config.thresholds.size_upper_limit = 2;
+config.use_sparse_arrays = 1;
 
 fprintf('Starting EXTRACT...\n');
 tic;
