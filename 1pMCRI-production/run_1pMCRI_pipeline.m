@@ -20,6 +20,10 @@ repo_root = fileparts(script_dir);
 
 dataset_name = get_opt(opts, 'dataset_name', '/mov');
 chunk_frames = get_opt(opts, 'chunk_frames', 1000);
+chunk_t = get_opt(opts, 'chunk_t', []);
+chunk_x = get_opt(opts, 'chunk_x', []);
+chunk_y = get_opt(opts, 'chunk_y', []);
+target_chunk_mb = get_opt(opts, 'target_chunk_mb', 16);
 use_python_converter = get_opt(opts, 'use_python_converter', true);
 python_exe = get_opt(opts, 'python_exe', ''); % empty -> auto-detect
 quick_n_frames = get_opt(opts, 'quick_n_frames', inf);
@@ -27,11 +31,14 @@ avg_cell_radius = get_opt(opts, 'avg_cell_radius', 6);
 gpu_id = get_opt(opts, 'gpu_id', 1);
 downsample_time_by = get_opt(opts, 'downsample_time_by', 5);
 max_iter = get_opt(opts, 'max_iter', 6);
+cellfind_max_steps = get_opt(opts, 'cellfind_max_steps', []);
 verbose = get_opt(opts, 'verbose', 2);
 use_gpu = get_opt(opts, 'use_gpu', true);
 parallel_cpu = get_opt(opts, 'parallel_cpu', false);
 force_rebuild_h5 = get_opt(opts, 'force_rebuild_h5', false);
 thresholds = get_opt(opts, 'thresholds', struct());
+num_partitions_x = get_opt(opts, 'num_partitions_x', []);
+num_partitions_y = get_opt(opts, 'num_partitions_y', []);
 
 if ispc
     default_fast_h5_dir = fullfile('E:\', 'EXTRACT-cache');
@@ -81,7 +88,8 @@ else
     if use_python_converter
         python_exe = resolve_python_exe(python_exe);
         run_python_tiff_to_h5( ...
-            fast_tiff_path, h5_path, dataset_name, chunk_frames, python_exe, script_dir);
+            fast_tiff_path, h5_path, dataset_name, chunk_frames, ...
+            chunk_t, chunk_x, chunk_y, target_chunk_mb, python_exe, script_dir);
     else
         convert_tiff_to_h5_chunked_uint16(fast_tiff_path, h5_path, dataset_name, chunk_frames);
     end
@@ -119,11 +127,18 @@ config.num_frames = n_frames;
 config.downsample_time_by = downsample_time_by;
 config.avg_cell_radius = avg_cell_radius;
 config.max_iter = max_iter;
+if ~isempty(cellfind_max_steps)
+    config.cellfind_max_steps = cellfind_max_steps;
+end
 config.verbose = verbose;
 config.thresholds.eccent_thresh = get_opt(thresholds, 'eccent_thresh', 2);
 config.thresholds.size_lower_limit = get_opt(thresholds, 'size_lower_limit', 0.2);
 config.thresholds.size_upper_limit = get_opt(thresholds, 'size_upper_limit', 2);
 config.use_sparse_arrays = 1;
+if ~isempty(num_partitions_x) && ~isempty(num_partitions_y)
+    config.num_partitions_x = num_partitions_x;
+    config.num_partitions_y = num_partitions_y;
+end
 
 tic;
 output = extractor(M, config);
@@ -287,15 +302,26 @@ end
 clear cleanup_fid
 end
 
-function run_python_tiff_to_h5(input_tiff, output_h5, dataset_name, chunk_frames, python_exe, script_dir)
+function run_python_tiff_to_h5(input_tiff, output_h5, dataset_name, chunk_frames, ...
+    chunk_t, chunk_x, chunk_y, target_chunk_mb, python_exe, script_dir)
 py_script = fullfile(script_dir, 'tiff_to_h5_fast.py');
 if ~isfile(py_script)
     error('Python converter script not found: %s', py_script);
 end
 
 % Use unbuffered Python + MATLAB echo mode so progress is shown live.
-cmd = sprintf('"%s" -u "%s" --input "%s" --output "%s" --dataset "%s" --chunk-frames %d', ...
-    python_exe, py_script, input_tiff, output_h5, dataset_name, chunk_frames);
+cmd = sprintf(['"%s" -u "%s" --input "%s" --output "%s" --dataset "%s" ', ...
+    '--chunk-frames %d --target-chunk-mb %.2f'], ...
+    python_exe, py_script, input_tiff, output_h5, dataset_name, chunk_frames, target_chunk_mb);
+if ~isempty(chunk_t)
+    cmd = sprintf('%s --chunk-t %d', cmd, chunk_t);
+end
+if ~isempty(chunk_x)
+    cmd = sprintf('%s --chunk-x %d', cmd, chunk_x);
+end
+if ~isempty(chunk_y)
+    cmd = sprintf('%s --chunk-y %d', cmd, chunk_y);
+end
 fprintf('Running Python converter:\n%s\n', cmd);
 
 try

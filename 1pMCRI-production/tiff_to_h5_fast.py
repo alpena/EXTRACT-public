@@ -8,6 +8,7 @@ Supports:
 
 Usage:
   python tiff_to_h5_fast.py --input <input.tif> --output <output.h5> --dataset /mov --chunk-frames 1000
+  python tiff_to_h5_fast.py --input <input.tif> --output <output.h5> --chunk-t 96 --chunk-x 256 --chunk-y 256
 """
 
 from __future__ import annotations
@@ -28,7 +29,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--input", required=True, help="Input TIFF path")
     p.add_argument("--output", required=True, help="Output H5 path")
     p.add_argument("--dataset", default="/mov", help="Dataset name in H5 (default: /mov)")
-    p.add_argument("--chunk-frames", type=int, default=200, help="Target chunk frames")
+    p.add_argument("--chunk-frames", type=int, default=200, help="Legacy time-chunk option (same as --chunk-t)")
+    p.add_argument("--chunk-t", type=int, default=0, help="Chunk size along time axis")
+    p.add_argument("--chunk-x", type=int, default=0, help="Chunk size along x axis (stored x)")
+    p.add_argument("--chunk-y", type=int, default=0, help="Chunk size along y axis (stored y)")
+    p.add_argument("--target-chunk-mb", type=float, default=16.0, help="Target chunk size in MiB for auto chunking")
     p.add_argument("--expected-height", type=int, default=0, help="Expected frame height from TIFF metadata")
     p.add_argument("--expected-width", type=int, default=0, help="Expected frame width from TIFF metadata")
     p.add_argument("--expected-frames", type=int, default=0, help="Expected total frames from TIFF metadata")
@@ -98,9 +103,17 @@ def main() -> int:
     out_path = args.output
     dset_name = normalize_dataset_name(args.dataset)
     chunk_frames_req = int(args.chunk_frames)
+    chunk_t_req = int(args.chunk_t)
+    chunk_x_req = int(args.chunk_x)
+    chunk_y_req = int(args.chunk_y)
+    target_chunk_mb = float(args.target_chunk_mb)
 
     if chunk_frames_req < 1:
         raise ValueError("chunk-frames must be >= 1")
+    if chunk_t_req < 0 or chunk_x_req < 0 or chunk_y_req < 0:
+        raise ValueError("chunk-t/chunk-x/chunk-y must be >= 0")
+    if target_chunk_mb <= 0:
+        raise ValueError("target-chunk-mb must be > 0")
     if not os.path.isfile(in_path):
         raise FileNotFoundError(f"Input TIFF not found: {in_path}")
 
@@ -125,15 +138,50 @@ def main() -> int:
         if dtype != np.uint16:
             raise ValueError(f"Expected uint16 TIFF, got {dtype}")
 
-        chunk_max = max_chunk_frames(height, width, 2)
-        chunk_frames = min(chunk_frames_req, chunk_max, total_frames)
+        # Stored shape is (t, x, y), so width/height map to x/y chunking.
+        chunk_t_base_req = chunk_t_req if chunk_t_req > 0 else chunk_frames_req
+        chunk_t_max = max_chunk_frames(height, width, 2)
+        chunk_t = min(chunk_t_base_req, chunk_t_max, total_frames)
+        chunk_x = chunk_x_req if chunk_x_req > 0 else min(width, 256)
+        chunk_y = chunk_y_req if chunk_y_req > 0 else min(height, 256)
+
+        # Auto-adjust x/y when not explicitly specified to hit target chunk size.
+        if chunk_x_req <= 0 or chunk_y_req <= 0:
+            target_bytes = int(target_chunk_mb * 1024**2)
+            bytes_per_t_plane = max(chunk_t * 2, 1)  # uint16
+            target_xy_area = max(target_bytes // bytes_per_t_plane, 1)
+            side = int(np.sqrt(target_xy_area))
+            side = max(64, min(side, 512))
+            if chunk_x_req <= 0:
+                chunk_x = min(width, side)
+            if chunk_y_req <= 0:
+                chunk_y = min(height, side)
+
+        # Hard clamp to valid ranges.
+        chunk_x = max(1, min(chunk_x, width))
+        chunk_y = max(1, min(chunk_y, height))
+
+        # Ensure chunk byte-size stays within HDF5's <4GB chunk constraint.
+        chunk_bytes = int(chunk_t) * int(chunk_x) * int(chunk_y) * 2
+        max_chunk_bytes = 4 * 1024**3 - 1
+        while chunk_bytes > max_chunk_bytes and chunk_t > 1:
+            chunk_t = max(1, chunk_t // 2)
+            chunk_bytes = int(chunk_t) * int(chunk_x) * int(chunk_y) * 2
+        while chunk_bytes > max_chunk_bytes and (chunk_x > 1 or chunk_y > 1):
+            if chunk_x >= chunk_y and chunk_x > 1:
+                chunk_x = max(1, chunk_x // 2)
+            elif chunk_y > 1:
+                chunk_y = max(1, chunk_y // 2)
+            chunk_bytes = int(chunk_t) * int(chunk_x) * int(chunk_y) * 2
 
         print(f"Input TIFF: {in_path}")
         print(f"Series shape/axes: {shape} / {axes}")
         print(f"Expected (t,y,x): ({total_frames},{height},{width})")
         print(f"Output H5: {out_path}:{dset_name}")
-        if chunk_frames < chunk_frames_req:
-            print(f"chunk-frames={chunk_frames_req} exceeds HDF5 limit; using {chunk_frames}")
+        print(
+            f"Chunk (stored t,x,y): ({chunk_t},{chunk_x},{chunk_y}) "
+            f"[{chunk_bytes / (1024**2):.1f} MiB]"
+        )
 
         mm = tifffile.memmap(in_path, series=0)
 
@@ -147,7 +195,7 @@ def main() -> int:
                 dset_name,
                 shape=h5_shape,
                 dtype=np.uint16,
-                chunks=(min(chunk_frames, total_frames), width, height),
+                chunks=(chunk_t, chunk_x, chunk_y),
             )
             t0 = time.perf_counter()
             bytes_per_frame = height * width * 2
@@ -160,10 +208,10 @@ def main() -> int:
                 mb_s = bytes_per_frame / elapsed / (1024**2)
                 print(f"Chunk 1/1: frames 1-1 | 100.0% | {mb_s:.1f} MiB/s | ETA 0.0s", flush=True)
             else:
-                num_chunks = (total_frames + chunk_frames - 1) // chunk_frames
+                num_chunks = (total_frames + chunk_t - 1) // chunk_t
                 for i in range(num_chunks):
-                    f_begin = i * chunk_frames
-                    f_end = min((i + 1) * chunk_frames, total_frames)
+                    f_begin = i * chunk_t
+                    f_end = min((i + 1) * chunk_t, total_frames)
                     n_this = f_end - f_begin
                     block = mm[f_begin:f_end, :, :]
                     block_nyx = normalize_block_to_nyx(block, n_this, height, width)

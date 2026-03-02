@@ -6,6 +6,11 @@ input_tiff = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC
 opts = struct();
 opts.dataset_name = '/mov';
 opts.chunk_frames = 1000;
+% For faster XY-partition reads in EXTRACT, use tiled chunks:
+opts.chunk_t = 96;
+opts.chunk_x = 256;
+opts.chunk_y = 256;
+opts.target_chunk_mb = 16;
 opts.use_python_converter = true;
 opts.python_exe = ''; % empty -> auto-detect (Conda/Anaconda preferred)
 opts.quick_n_frames = inf;
@@ -14,6 +19,9 @@ opts.gpu_id = 1;
 opts.use_gpu = true;
 opts.parallel_cpu = false;
 opts.force_rebuild_h5 = false;
+opts.cellfind_max_steps = 1500; % max ROI candidates per partition
+
+%opts.num_partitions_x = 5; opts.num_partitions_y = 5;
 
 % Optional threshold overrides
 opts.thresholds = struct();
