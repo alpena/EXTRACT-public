@@ -3,7 +3,11 @@
 h5_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
     '1pMCRI-demo', '250206-UK6-1-F=4_power=5mW_reg_t_crop_s_full.h5');
 dataset_name = '/mov';
-fast_h5_dir = fullfile('E:\', 'EXTRACT-cache');
+if ispc
+    fast_h5_dir = fullfile('E:\', 'EXTRACT-cache');
+else
+    fast_h5_dir = fullfile(filesep, 'mnt', 'nvme', 'EXTRACT-cache');
+end
 quick_n_frames = inf;
 avg_cell_radius = 6;
 gpu_id = 1;
@@ -66,10 +70,15 @@ fprintf('Frames used: %d / %d\n', n_frames, total_frames);
 
 config = get_defaults([]);
 config.preprocess = true;
+
 config.use_gpu = true;
 config.multi_gpu = false;
 config.pick_gpu = gpu_id;
 config.use_default_gpu = false;
+
+% config.parallel_cpu = true;
+% config.use_gpu = false;
+
 config.num_frames = n_frames;
 config.downsample_time_by = 5;
 config.avg_cell_radius = avg_cell_radius;

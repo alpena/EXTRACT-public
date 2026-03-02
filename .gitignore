@@ -3,6 +3,7 @@
 *.hdf5
 *.tif
 *.tiff
+*.png
 1pMCRI-demo/
 *.mat
 *.eps
