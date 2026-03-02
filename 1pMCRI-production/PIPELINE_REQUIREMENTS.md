@@ -3,7 +3,7 @@
 This document summarizes environment requirements and machine-specific settings for:
 
 - `1pMCRI-production/tiff_to_h5_fast.py`
-- `1pMCRI-production/run_target_reach_250810_pipeline.m`
+- `1pMCRI-production/run_1pMCRI_pipeline.m`
 - `1pMCRI-production/test_1pMCRI_minimal.m`
 
 ## 1. Required software
@@ -40,7 +40,7 @@ Both TIFF and H5 are processed on this fast drive to reduce I/O bottlenecks.
 
 ## 3. Python executable selection
 
-`1pMCRI-production/run_target_reach_250810_pipeline.m` supports:
+`1pMCRI-production/run_1pMCRI_pipeline.m` supports:
 
 - Auto-detect mode: `python_exe = ''`
 - Manual override: set full path (recommended if auto-detect fails)
@@ -67,7 +67,7 @@ Examples:
 
 ## 6. Typical execution flow
 
-1. Run `run_target_reach_250810_pipeline.m`.
+1. Run `run_1pMCRI_pipeline(input_tiff, opts)`.
 2. Script copies TIFF to fast drive cache.
 3. Script runs Python TIFF->H5 conversion.
 4. Script runs EXTRACT from fast-drive H5 reference.

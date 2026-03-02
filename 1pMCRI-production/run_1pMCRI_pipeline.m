@@ -1,41 +1,51 @@
-%% End-to-end pipeline for target_reach dataset
-% 1) Convert TIFF stack to H5 (/mov) in chunks (uint16)
-% 2) Run EXTRACT using H5 reference input (single GPU by default)
+function result = run_1pMCRI_pipeline(input_tiff, opts)
+% Standard 1pMCRI pipeline:
+% 1) Copy TIFF to fast drive cache
+% 2) Convert TIFF -> H5 (/mov)
+% 3) Run EXTRACT and save output MAT
 %
-% Target TIFF:
-% R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC#78_reg.tif
+% Usage:
+%   run_1pMCRI_pipeline('R:\path\movie.tif');
+%   run_1pMCRI_pipeline('R:\path\movie.tif', struct('gpu_id', 1));
 
-%% User parameters
-%input_tiff = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC#78_reg.tif';
-input_tiff = 'R:\code\EXTRACT-public\1pMCRI-demo\250206-UK6-1-F=4_power=5mW_reg_crop.tiff';
-dataset_name = '/mov';
-% Recommended: 1000 for speed. Lower to ~500 if RAM is tight.
-% If RAM allows, 1500-2000 may further improve throughput.
-chunk_frames = 1000;
-use_python_converter = true;
-python_exe = ''; % empty -> auto-detect (Conda/Anaconda preferred)
-
-% Fast drive cache for EXTRACT runtime
-if ispc
-    fast_h5_dir = fullfile('E:\', 'EXTRACT-cache');
-else
-    fast_h5_dir = fullfile(filesep, 'mnt', 'nvme', 'EXTRACT-cache');
+if nargin < 1 || isempty(input_tiff)
+    error('input_tiff is required. Example: run_1pMCRI_pipeline(''R:\\data\\movie.tif'')');
+end
+if nargin < 2 || isempty(opts)
+    opts = struct();
 end
 
-% H5 output location (directly on fast drive)
-[~, src_name, src_ext] = fileparts(input_tiff);
-fast_tiff_path = fullfile(fast_h5_dir, [src_name src_ext]);
-h5_path = fullfile(fast_h5_dir, [src_name '.h5']);
-
-quick_n_frames = inf;
-avg_cell_radius = 6;
-gpu_id = 1;
-save_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    '1pMCRI-production', 'output_target_reach_250810.mat');
-
-%% Initialize paths
 script_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(script_dir);
+
+dataset_name = get_opt(opts, 'dataset_name', '/mov');
+chunk_frames = get_opt(opts, 'chunk_frames', 1000);
+use_python_converter = get_opt(opts, 'use_python_converter', true);
+python_exe = get_opt(opts, 'python_exe', ''); % empty -> auto-detect
+quick_n_frames = get_opt(opts, 'quick_n_frames', inf);
+avg_cell_radius = get_opt(opts, 'avg_cell_radius', 6);
+gpu_id = get_opt(opts, 'gpu_id', 1);
+downsample_time_by = get_opt(opts, 'downsample_time_by', 5);
+max_iter = get_opt(opts, 'max_iter', 6);
+verbose = get_opt(opts, 'verbose', 2);
+use_gpu = get_opt(opts, 'use_gpu', true);
+parallel_cpu = get_opt(opts, 'parallel_cpu', false);
+force_rebuild_h5 = get_opt(opts, 'force_rebuild_h5', false);
+thresholds = get_opt(opts, 'thresholds', struct());
+
+if ispc
+    default_fast_h5_dir = fullfile('E:\', 'EXTRACT-cache');
+else
+    default_fast_h5_dir = fullfile(filesep, 'mnt', 'nvme', 'EXTRACT-cache');
+end
+fast_h5_dir = get_opt(opts, 'fast_h5_dir', default_fast_h5_dir);
+
+[~, src_name, src_ext] = fileparts(input_tiff);
+fast_tiff_path = fullfile(fast_h5_dir, [src_name src_ext]);
+h5_path = get_opt(opts, 'h5_path', fullfile(fast_h5_dir, [src_name '.h5']));
+default_save_path = fullfile(repo_root, '1pMCRI-production', ['output_' src_name '.mat']);
+save_path = get_opt(opts, 'save_path', default_save_path);
+
 addpath(repo_root);
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 addpath(genpath(fullfile(repo_root, 'External algorithms')));
@@ -62,9 +72,12 @@ else
     fprintf('Using existing fast-drive TIFF: %s\n', fast_tiff_path);
 end
 
-if isfile(h5_path)
+if isfile(h5_path) && ~force_rebuild_h5
     fprintf('H5 already exists. Skipping conversion: %s\n', h5_path);
 else
+    if isfile(h5_path) && force_rebuild_h5
+        delete(h5_path);
+    end
     if use_python_converter
         python_exe = resolve_python_exe(python_exe);
         run_python_tiff_to_h5( ...
@@ -85,29 +98,31 @@ total_frames = movie_size(3);
 n_frames = min(quick_n_frames, total_frames);
 M = [h5_fast_path ':' dataset_name];
 
-if gpuDeviceCount < gpu_id
-    error('Requested gpu_id=%d is not available. Detected GPUs: %d', gpu_id, gpuDeviceCount);
+if use_gpu
+    if gpuDeviceCount < gpu_id
+        error('Requested gpu_id=%d is not available. Detected GPUs: %d', gpu_id, gpuDeviceCount);
+    end
+    gpuDevice(gpu_id);
 end
-gpuDevice(gpu_id);
 
 fprintf('Running EXTRACT on: %s\n', M);
 fprintf('Frames used: %d / %d\n', n_frames, total_frames);
 
 config = get_defaults([]);
 config.preprocess = true;
-config.use_gpu = true;
-config.parallel_cpu = false;
+config.use_gpu = use_gpu;
+config.parallel_cpu = parallel_cpu;
 config.multi_gpu = false;
 config.pick_gpu = gpu_id;
 config.use_default_gpu = false;
 config.num_frames = n_frames;
-config.downsample_time_by = 5;
+config.downsample_time_by = downsample_time_by;
 config.avg_cell_radius = avg_cell_radius;
-config.max_iter = 6;
-config.verbose = 2;
-config.thresholds.eccent_thresh = 2;
-config.thresholds.size_lower_limit = 0.2;
-config.thresholds.size_upper_limit = 2;
+config.max_iter = max_iter;
+config.verbose = verbose;
+config.thresholds.eccent_thresh = get_opt(thresholds, 'eccent_thresh', 2);
+config.thresholds.size_lower_limit = get_opt(thresholds, 'size_lower_limit', 0.2);
+config.thresholds.size_upper_limit = get_opt(thresholds, 'size_upper_limit', 2);
 config.use_sparse_arrays = 1;
 
 tic;
@@ -150,7 +165,23 @@ meta.timestamp = char(datetime('now', 'Format', 'yyyy-MM-dd''T''HH:mm:ss'));
 save(save_path, 'output', 'config_used', 'meta', '-v7.3');
 fprintf('Saved result: %s\n', save_path);
 
+result = struct();
+result.output = output;
+result.config_used = config_used;
+result.meta = meta;
+result.save_path = save_path;
+result.h5_path = h5_path;
+end
+
 %% ---- Local functions ----
+function v = get_opt(s, key, default_v)
+if isstruct(s) && isfield(s, key) && ~isempty(s.(key))
+    v = s.(key);
+else
+    v = default_v;
+end
+end
+
 function convert_tiff_to_h5_chunked_uint16(input_tiff, output_h5, dataset_name, chunk_frames)
 tiff_info = imfinfo(input_tiff);
 [height, width] = deal(tiff_info(1).Height, tiff_info(1).Width);
