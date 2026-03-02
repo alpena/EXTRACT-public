@@ -98,6 +98,14 @@ for i = 1:num_chunks
     h5write(output_h5, dataset_name, block, [1, 1, f_begin], [height, width, n_this]);
 end
 
+out_info = h5info(output_h5, dataset_name);
+out_size = out_info.Dataspace.Size;
+if ~isequal(out_size, [height, width, total_frames])
+    error('Output H5 shape mismatch. Expected [%d %d %d], got [%d %d %d].', ...
+        height, width, total_frames, out_size(1), out_size(2), out_size(3));
+end
+fprintf('H5 dataset shape (h,w,t): [%d %d %d]\n', out_size(1), out_size(2), out_size(3));
+
 fprintf('Done. Wrote H5: %s\n', output_h5);
 
 function total_frames = detect_total_frames(tiff_info)

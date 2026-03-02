@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import itertools
 import os
 import sys
 import time
@@ -28,6 +29,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output", required=True, help="Output H5 path")
     p.add_argument("--dataset", default="/mov", help="Dataset name in H5 (default: /mov)")
     p.add_argument("--chunk-frames", type=int, default=200, help="Target chunk frames")
+    p.add_argument("--expected-height", type=int, default=0, help="Expected frame height from TIFF metadata")
+    p.add_argument("--expected-width", type=int, default=0, help="Expected frame width from TIFF metadata")
+    p.add_argument("--expected-frames", type=int, default=0, help="Expected total frames from TIFF metadata")
     return p.parse_args()
 
 
@@ -39,6 +43,53 @@ def max_chunk_frames(height: int, width: int, dtype_bytes: int = 2) -> int:
 
 def normalize_dataset_name(name: str) -> str:
     return name if name.startswith("/") else "/" + name
+
+
+def normalize_block_to_nyx(block: np.ndarray, n_this: int, height: int, width: int) -> np.ndarray:
+    arr = np.asarray(block, dtype=np.uint16)
+    if arr.ndim == 2:
+        if n_this != 1:
+            raise ValueError(f"2D block cannot represent n_this={n_this}")
+        arr = arr[np.newaxis, :, :]
+    if arr.ndim != 3:
+        raise ValueError(f"Expected 2D/3D block, got shape {arr.shape}")
+
+    target = (n_this, height, width)
+    if tuple(arr.shape) == target:
+        return arr
+
+    for perm in itertools.permutations((0, 1, 2)):
+        if tuple(arr.shape[idx] for idx in perm) == target:
+            return np.transpose(arr, perm)
+
+    raise ValueError(
+        f"Cannot align block shape {arr.shape} to expected (n,y,x)={target}"
+    )
+
+
+def infer_tyx_from_series(shape: tuple[int, ...], axes: str | None) -> tuple[int, int, int]:
+    if len(shape) == 2:
+        h, w = shape
+        return 1, h, w
+    if len(shape) != 3:
+        raise ValueError(f"Unsupported TIFF shape: {shape}")
+
+    if axes:
+        axes_u = axes.upper()
+        if "Y" in axes_u and "X" in axes_u:
+            idx_y = axes_u.index("Y")
+            idx_x = axes_u.index("X")
+            idx_t = None
+            for key in ("T", "I", "Z"):
+                if key in axes_u:
+                    idx_t = axes_u.index(key)
+                    break
+            if idx_t is not None:
+                return int(shape[idx_t]), int(shape[idx_y]), int(shape[idx_x])
+
+    # Fallback for standard (t, y, x).
+    t, h, w = shape
+    return int(t), int(h), int(w)
 
 
 def main() -> int:
@@ -60,16 +111,16 @@ def main() -> int:
     with tifffile.TiffFile(in_path) as tif:
         series = tif.series[0]
         shape = series.shape
+        axes = getattr(series, "axes", "")
         dtype = np.dtype(series.dtype)
 
-        # Expect (t, y, x) or (y, x) for single-frame.
-        if len(shape) == 2:
-            total_frames = 1
-            height, width = shape
-        elif len(shape) == 3:
-            total_frames, height, width = shape
-        else:
-            raise ValueError(f"Unsupported TIFF shape: {shape}")
+        inferred_frames, inferred_height, inferred_width = infer_tyx_from_series(shape, axes)
+        expected_height = int(args.expected_height)
+        expected_width = int(args.expected_width)
+        expected_frames = int(args.expected_frames)
+        height = expected_height if expected_height > 0 else inferred_height
+        width = expected_width if expected_width > 0 else inferred_width
+        total_frames = expected_frames if expected_frames > 0 else inferred_frames
 
         if dtype != np.uint16:
             raise ValueError(f"Expected uint16 TIFF, got {dtype}")
@@ -78,24 +129,33 @@ def main() -> int:
         chunk_frames = min(chunk_frames_req, chunk_max, total_frames)
 
         print(f"Input TIFF: {in_path}")
-        print(f"Shape (t,y,x): ({total_frames},{height},{width})")
+        print(f"Series shape/axes: {shape} / {axes}")
+        print(f"Expected (t,y,x): ({total_frames},{height},{width})")
         print(f"Output H5: {out_path}:{dset_name}")
         if chunk_frames < chunk_frames_req:
             print(f"chunk-frames={chunk_frames_req} exceeds HDF5 limit; using {chunk_frames}")
 
+        mm = tifffile.memmap(in_path, series=0)
+
+        # MATLAB/HDF5 interoperability:
+        # h5py shape order is interpreted differently by MATLAB h5info/h5read.
+        # To make MATLAB see [height,width,frames], write as [frames,width,height].
+        h5_shape = (total_frames, width, height)
+
         with h5py.File(out_path, "w") as h5:
             ds = h5.create_dataset(
                 dset_name,
-                shape=(height, width, total_frames),
+                shape=h5_shape,
                 dtype=np.uint16,
-                chunks=(height, width, chunk_frames),
+                chunks=(min(chunk_frames, total_frames), width, height),
             )
             t0 = time.perf_counter()
             bytes_per_frame = height * width * 2
 
             if total_frames == 1:
-                frame = series.asarray()
-                ds[:, :, 0] = frame
+                frame = mm[0, :, :] if mm.ndim == 3 else mm[:, :]
+                block_nyx = normalize_block_to_nyx(frame, 1, height, width)
+                ds[0, :, :] = block_nyx[0, :, :].T
                 elapsed = max(time.perf_counter() - t0, 1e-9)
                 mb_s = bytes_per_frame / elapsed / (1024**2)
                 print(f"Chunk 1/1: frames 1-1 | 100.0% | {mb_s:.1f} MiB/s | ETA 0.0s", flush=True)
@@ -104,10 +164,11 @@ def main() -> int:
                 for i in range(num_chunks):
                     f_begin = i * chunk_frames
                     f_end = min((i + 1) * chunk_frames, total_frames)
-                    # Read chunk as (n, y, x), then transpose to (y, x, n).
-                    block = series.asarray(key=range(f_begin, f_end))
-                    block = np.asarray(block, dtype=np.uint16).transpose(1, 2, 0)
-                    ds[:, :, f_begin:f_end] = block
+                    n_this = f_end - f_begin
+                    block = mm[f_begin:f_end, :, :]
+                    block_nyx = normalize_block_to_nyx(block, n_this, height, width)
+                    # (n,y,x) -> (n,x,y) for MATLAB-compatible storage
+                    ds[f_begin:f_end, :, :] = block_nyx.transpose(0, 2, 1)
                     done_frames = f_end
                     progress = done_frames / total_frames * 100.0
                     elapsed = max(time.perf_counter() - t0, 1e-9)
@@ -121,6 +182,19 @@ def main() -> int:
                         f"{progress:5.1f}% | {mb_s:7.1f} MiB/s | ETA {eta_s:7.1f}s",
                         flush=True,
                     )
+
+            # Enforce MATLAB-visible layout [height, width, frames] by writing
+            # HDF5 as [frames, width, height] from Python.
+            if tuple(ds.shape) != h5_shape:
+                raise ValueError(
+                    f"Invalid output shape {ds.shape}; expected stored (frames,width,height)="
+                    f"({total_frames},{width},{height})"
+                )
+            print(f"H5 dataset stored shape (t,x,y): {ds.shape}", flush=True)
+            print(
+                f"MATLAB expected view (h,w,t): ({height}, {width}, {total_frames})",
+                flush=True,
+            )
 
     print(f"Done. Wrote H5: {out_path}")
     return 0

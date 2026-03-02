@@ -6,7 +6,8 @@
 % R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC#78_reg.tif
 
 %% User parameters
-input_tiff = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC#78_reg.tif';
+%input_tiff = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC#78_reg.tif';
+input_tiff = 'R:\code\EXTRACT-public\1pMCRI-demo\250206-UK6-1-F=4_power=5mW_reg_crop.tiff';
 dataset_name = '/mov';
 % Recommended: 1000 for speed. Lower to ~500 if RAM is tight.
 % If RAM allows, 1500-2000 may further improve throughput.
@@ -61,11 +62,55 @@ else
     fprintf('Using existing fast-drive TIFF: %s\n', fast_tiff_path);
 end
 
-if use_python_converter
-    python_exe = resolve_python_exe(python_exe);
-    run_python_tiff_to_h5(fast_tiff_path, h5_path, dataset_name, chunk_frames, python_exe, script_dir);
-else
-    convert_tiff_to_h5_chunked_uint16(fast_tiff_path, h5_path, dataset_name, chunk_frames);
+% Detect expected movie shape directly from TIFF metadata.
+tiff_info = imfinfo(fast_tiff_path);
+expected_height = tiff_info(1).Height;
+expected_width = tiff_info(1).Width;
+expected_frames = detect_total_frames(tiff_info);
+expected_size = [expected_height, expected_width, expected_frames];
+
+need_h5_conversion = true;
+if isfile(h5_path)
+    try
+        existing_info = h5info(h5_path, dataset_name);
+        existing_size = existing_info.Dataspace.Size;
+        if isequal(existing_size, expected_size)
+            fprintf('H5 already exists with expected shape. Skipping conversion: %s\n', h5_path);
+            need_h5_conversion = false;
+        else
+            fprintf(['Existing H5 shape mismatch. Rebuilding.\n', ...
+                'Expected: [%d %d %d], Found: [%d %d %d]\n'], ...
+                expected_size(1), expected_size(2), expected_size(3), ...
+                existing_size(1), existing_size(2), existing_size(3));
+            delete(h5_path);
+        end
+    catch me
+        fprintf('Failed to validate existing H5 (%s). Rebuilding: %s\n', me.message, h5_path);
+        if isfile(h5_path)
+            delete(h5_path);
+        end
+    end
+end
+
+if need_h5_conversion
+    if use_python_converter
+        python_exe = resolve_python_exe(python_exe);
+        run_python_tiff_to_h5( ...
+            fast_tiff_path, h5_path, dataset_name, chunk_frames, python_exe, script_dir, ...
+            expected_height, expected_width, expected_frames);
+    else
+        convert_tiff_to_h5_chunked_uint16(fast_tiff_path, h5_path, dataset_name, chunk_frames);
+    end
+end
+
+% Validate H5 shape before EXTRACT to prevent wrong partitioning.
+verify_info = h5info(h5_path, dataset_name);
+verify_size = verify_info.Dataspace.Size;
+if ~isequal(verify_size, expected_size)
+    error(['H5 dataset shape mismatch after conversion.\n', ...
+        'Expected [%d %d %d], found [%d %d %d] for %s:%s'], ...
+        expected_size(1), expected_size(2), expected_size(3), ...
+        verify_size(1), verify_size(2), verify_size(3), h5_path, dataset_name);
 end
 
 %% Step 2: Run EXTRACT from H5 reference on fast drive
@@ -250,17 +295,27 @@ end
 clear cleanup_fid
 end
 
-function run_python_tiff_to_h5(input_tiff, output_h5, dataset_name, chunk_frames, python_exe, script_dir)
+function run_python_tiff_to_h5(input_tiff, output_h5, dataset_name, chunk_frames, python_exe, script_dir, expected_height, expected_width, expected_frames)
 py_script = fullfile(script_dir, 'tiff_to_h5_fast.py');
 if ~isfile(py_script)
     error('Python converter script not found: %s', py_script);
 end
 
-cmd = sprintf('"%s" "%s" --input "%s" --output "%s" --dataset "%s" --chunk-frames %d', ...
-    python_exe, py_script, input_tiff, output_h5, dataset_name, chunk_frames);
+% Use unbuffered Python + MATLAB echo mode so progress is shown live.
+cmd = sprintf(['"%s" -u "%s" --input "%s" --output "%s" --dataset "%s" --chunk-frames %d ', ...
+    '--expected-height %d --expected-width %d --expected-frames %d'], ...
+    python_exe, py_script, input_tiff, output_h5, dataset_name, chunk_frames, ...
+    expected_height, expected_width, expected_frames);
 fprintf('Running Python converter:\n%s\n', cmd);
-[status, out] = system(cmd);
-fprintf('%s\n', out);
+
+try
+    status = system(cmd, '-echo');
+catch
+    % Fallback for older MATLAB versions that do not support '-echo'.
+    [status, out] = system(cmd);
+    fprintf('%s\n', out);
+end
+
 if status ~= 0
     error(['Python TIFF->H5 conversion failed. ', ...
         'Set python_exe to a valid interpreter with tifffile/h5py installed.']);
