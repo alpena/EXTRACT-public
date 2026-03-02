@@ -5,9 +5,9 @@
 %
 % Edit parameters in this section.
 input_tiff = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    '1pMCRI-demo', '250206-UK6-1-F=4_power=5mW_reg_crop.tiff');
+    '1pMCRI-demo', '250206-UK6-1-F=4_power=5mW_reg_t_crop_s_full.tiff');
 output_h5 = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    '1pMCRI-demo', '250206-UK6-1-F=4_power=5mW_reg_crop.h5');
+    '1pMCRI-demo', '250206-UK6-1-F=4_power=5mW_reg_t_crop_s_full.h5');
 dataset_name = '/mov';
 chunk_frames = 200;
 
@@ -34,7 +34,7 @@ end
 
 % Use chunk size [h,w,chunk_frames] for streaming write.
 h5create(output_h5, dataset_name, [height, width, total_frames], ...
-    'Datatype', 'single', ...
+    'Datatype', 'uint16', ...
     'ChunkSize', [height, width, min(chunk_frames, total_frames)]);
 
 machinefmt = detect_tiff_byte_order(input_tiff);
@@ -79,7 +79,7 @@ for i = 1:num_chunks
     fprintf('Chunk %d/%d: frames %d-%d\n', i, num_chunks, f_begin, f_end);
 
     if is_imagej_single_ifd
-        block = zeros(height, width, n_this, 'single');
+        block = zeros(height, width, n_this, 'uint16');
         for k = 1:n_this
             frame_idx = f_begin + k - 1;
             offset = strip_offset + (frame_idx - 1) * frame_bytes;
@@ -89,10 +89,10 @@ for i = 1:num_chunks
                 error('Failed to read frame %d from TIFF.', frame_idx);
             end
             % TIFF raster is row-major; transpose for MATLAB.
-            block(:, :, k) = single(reshape(frame, [width, height])');
+            block(:, :, k) = reshape(frame, [width, height])';
         end
     else
-        block = read_from_tif(input_tiff, f_begin, n_this);
+        block = uint16(read_from_tif(input_tiff, f_begin, n_this));
     end
 
     h5write(output_h5, dataset_name, block, [1, 1, f_begin], [height, width, n_this]);
