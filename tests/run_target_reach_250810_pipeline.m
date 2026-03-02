@@ -8,7 +8,11 @@
 %% User parameters
 input_tiff = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC#78_reg.tif';
 dataset_name = '/mov';
-chunk_frames = 200;
+% Recommended: 1000 for speed. Lower to ~500 if RAM is tight.
+% If RAM allows, 1500-2000 may further improve throughput.
+chunk_frames = 1000;
+use_python_converter = true;
+python_exe = ''; % empty -> auto-detect (Conda/Anaconda preferred)
 
 % Fast drive cache for EXTRACT runtime
 if ispc
@@ -57,7 +61,12 @@ else
     fprintf('Using existing fast-drive TIFF: %s\n', fast_tiff_path);
 end
 
-convert_tiff_to_h5_chunked_uint16(fast_tiff_path, h5_path, dataset_name, chunk_frames);
+if use_python_converter
+    python_exe = resolve_python_exe(python_exe);
+    run_python_tiff_to_h5(fast_tiff_path, h5_path, dataset_name, chunk_frames, python_exe, script_dir);
+else
+    convert_tiff_to_h5_chunked_uint16(fast_tiff_path, h5_path, dataset_name, chunk_frames);
+end
 
 %% Step 2: Run EXTRACT from H5 reference on fast drive
 h5_fast_path = h5_path;
@@ -148,9 +157,18 @@ fprintf('Size: %d x %d x %d\n', height, width, total_frames);
 if isfile(output_h5)
     delete(output_h5);
 end
+
+% HDF5 requires chunk byte size < 4GB.
+bytes_per_frame = double(height) * double(width) * 2; % uint16
+max_chunk_frames = max(floor((4 * 1024^3 - 1) / bytes_per_frame), 1);
+effective_chunk_frames = min(chunk_frames, max_chunk_frames);
+if effective_chunk_frames < chunk_frames
+    fprintf(['chunk_frames=%d is too large for HDF5 chunk limit. ', ...
+        'Using %d instead.\n'], chunk_frames, effective_chunk_frames);
+end
 h5create(output_h5, dataset_name, [height, width, total_frames], ...
     'Datatype', 'uint16', ...
-    'ChunkSize', [height, width, min(chunk_frames, total_frames)]);
+    'ChunkSize', [height, width, min(effective_chunk_frames, total_frames)]);
 
 is_imagej_single_ifd = false;
 if num_ifd == 1 && total_frames > 1
@@ -176,25 +194,26 @@ if num_ifd == 1 && total_frames > 1
     cleanup_fid = onCleanup(@() fclose(fid));
 end
 
-num_chunks = ceil(total_frames / chunk_frames);
+num_chunks = ceil(total_frames / effective_chunk_frames);
 for i = 1:num_chunks
-    f_begin = (i - 1) * chunk_frames + 1;
-    f_end = min(i * chunk_frames, total_frames);
+    f_begin = (i - 1) * effective_chunk_frames + 1;
+    f_end = min(i * effective_chunk_frames, total_frames);
     n_this = f_end - f_begin + 1;
-    fprintf('Chunk %d/%d: frames %d-%d\n', i, num_chunks, f_begin, f_end);
+    if i == 1 || i == num_chunks || mod(i, 10) == 0
+        fprintf('Chunk %d/%d: frames %d-%d\n', i, num_chunks, f_begin, f_end);
+    end
 
     if is_imagej_single_ifd
-        block = zeros(height, width, n_this, 'uint16');
-        for k = 1:n_this
-            frame_idx = f_begin + k - 1;
-            offset = strip_offset + (frame_idx - 1) * frame_bytes;
-            fseek(fid, offset, 'bof');
-            frame = fread(fid, height * width, '*uint16');
-            if numel(frame) ~= height * width
-                error('Failed to read frame %d from TIFF.', frame_idx);
-            end
-            block(:, :, k) = reshape(frame, [width, height])';
+        offset = strip_offset + (f_begin - 1) * frame_bytes;
+        fseek(fid, offset, 'bof');
+        frame_vec = fread(fid, height * width * n_this, '*uint16');
+        if numel(frame_vec) ~= height * width * n_this
+            error(['Failed to read TIFF chunk frames %d-%d. ', ...
+                'Expected %d values, got %d.'], ...
+                f_begin, f_end, height * width * n_this, numel(frame_vec));
         end
+        % TIFF raster is row-major; transpose x/y for MATLAB ordering.
+        block = permute(reshape(frame_vec, [width, height, n_this]), [2 1 3]);
     else
         block = uint16(read_from_tif(input_tiff, f_begin, n_this));
     end
@@ -229,4 +248,76 @@ else
     error('Invalid TIFF byte-order signature.');
 end
 clear cleanup_fid
+end
+
+function run_python_tiff_to_h5(input_tiff, output_h5, dataset_name, chunk_frames, python_exe, script_dir)
+py_script = fullfile(script_dir, 'tiff_to_h5_fast.py');
+if ~isfile(py_script)
+    error('Python converter script not found: %s', py_script);
+end
+
+cmd = sprintf('"%s" "%s" --input "%s" --output "%s" --dataset "%s" --chunk-frames %d', ...
+    python_exe, py_script, input_tiff, output_h5, dataset_name, chunk_frames);
+fprintf('Running Python converter:\n%s\n', cmd);
+[status, out] = system(cmd);
+fprintf('%s\n', out);
+if status ~= 0
+    error(['Python TIFF->H5 conversion failed. ', ...
+        'Set python_exe to a valid interpreter with tifffile/h5py installed.']);
+end
+end
+
+function python_exe = resolve_python_exe(python_exe_in)
+% Auto-detect a usable Python executable. Prefer Conda/Anaconda.
+if nargin >= 1 && ~isempty(python_exe_in)
+    python_exe = python_exe_in;
+    return;
+end
+
+candidates = {};
+if ispc
+    userprofile = getenv('USERPROFILE');
+    localapp = getenv('LOCALAPPDATA');
+    conda_prefix = getenv('CONDA_PREFIX');
+    if ~isempty(conda_prefix)
+        candidates{end+1} = fullfile(conda_prefix, 'python.exe'); %#ok<AGROW>
+    end
+    if ~isempty(userprofile)
+        candidates{end+1} = fullfile(userprofile, 'anaconda3', 'python.exe'); %#ok<AGROW>
+        candidates{end+1} = fullfile(userprofile, 'miniconda3', 'python.exe'); %#ok<AGROW>
+    end
+    if ~isempty(localapp)
+        candidates{end+1} = fullfile(localapp, 'anaconda3', 'python.exe'); %#ok<AGROW>
+        candidates{end+1} = fullfile(localapp, 'miniconda3', 'python.exe'); %#ok<AGROW>
+    end
+    candidates{end+1} = 'python'; %#ok<AGROW>
+else
+    conda_prefix = getenv('CONDA_PREFIX');
+    if ~isempty(conda_prefix)
+        candidates{end+1} = fullfile(conda_prefix, 'bin', 'python'); %#ok<AGROW>
+    end
+    candidates{end+1} = 'python3'; %#ok<AGROW>
+    candidates{end+1} = 'python'; %#ok<AGROW>
+end
+
+for i = 1:numel(candidates)
+    c = candidates{i};
+    if contains(c, filesep) || contains(c, '\')
+        if isfile(c)
+            python_exe = c;
+            fprintf('Using Python: %s\n', python_exe);
+            return;
+        end
+    else
+        [status, ~] = system(sprintf('"%s" --version', c));
+        if status == 0
+            python_exe = c;
+            fprintf('Using Python: %s\n', python_exe);
+            return;
+        end
+    end
+end
+
+error(['No usable Python executable found. Set python_exe manually to your ', ...
+    'Anaconda python path (Windows example: C:\\Users\\<user>\\anaconda3\\python.exe).']);
 end
