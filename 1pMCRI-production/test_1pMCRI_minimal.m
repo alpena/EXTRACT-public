@@ -12,7 +12,7 @@ quick_n_frames = inf;
 avg_cell_radius = 6;
 gpu_id = 1;
 save_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    'tests', 'test_1pMCRI_output_full.mat');
+    '1pMCRI-production', 'test_1pMCRI_output_full.mat');
 
 %% Initialize paths from repo root
 script_dir = fileparts(mfilename('fullpath'));

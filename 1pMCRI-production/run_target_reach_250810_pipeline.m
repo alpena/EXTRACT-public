@@ -30,7 +30,7 @@ quick_n_frames = inf;
 avg_cell_radius = 6;
 gpu_id = 1;
 save_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    'tests', 'output_target_reach_250810.mat');
+    '1pMCRI-production', 'output_target_reach_250810.mat');
 
 %% Initialize paths
 script_dir = fileparts(mfilename('fullpath'));

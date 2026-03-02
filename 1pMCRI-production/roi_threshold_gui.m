@@ -4,7 +4,7 @@ function roi_threshold_gui()
 %   roi_threshold_gui
 
 result_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    'tests', 'test_1pMCRI_output_full.mat');
+    '1pMCRI-production', 'test_1pMCRI_output_full.mat');
 
 repo_root = fileparts(fileparts(mfilename('fullpath')));
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
