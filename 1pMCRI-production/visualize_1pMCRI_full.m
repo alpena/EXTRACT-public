@@ -2,7 +2,7 @@
 % This script loads EXTRACT output (.mat) and generates summary figures.
 
 result_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    '1pMCRI-production', 'test_1pMCRI_output_full.mat');
+    '1pMCRI-production', 'output_250810-Ras2-GC#78_reg_s_crop_partitionN=1.mat');
 
 script_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(script_dir);
