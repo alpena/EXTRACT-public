@@ -1,13 +1,14 @@
 %% Run 1pMCRI standard pipeline for target_reach 250810 dataset
 % Edit options here if needed, then run this script.
 
-%input_tiff = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC#78_reg.tif';
-input_tiff = 'R:\code\EXTRACT-public\1pMCRI-demo\250810-Ras2-GC#78_reg_s_crop.tif';
+input_tiff = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC#78_reg.tif';
+% input_tiff = 'R:\code\EXTRACT-public\1pMCRI-demo\250810-Ras2-GC#78_reg_s_crop.tif';
+[~, src_name, ~] = fileparts(input_tiff);
 
 opts = struct();
 opts.dataset_name = '/mov';
 % For faster XY-partition reads in EXTRACT, use tiled chunks:
-opts.chunk_t = 256;
+opts.chunk_t = 512;
 opts.chunk_x = 256;
 opts.chunk_y = 256;
 opts.use_python_converter = true;
@@ -22,6 +23,10 @@ opts.cellfind_max_steps = 2000; % max ROI candidates per partition
 opts.trace_output_option = 'no_constraint'; % e.g., 'baseline_adjusted','no_constraint','nonneg'
 % NOTE: 'no_constraint' is closest to the raw overlap-separated trace output.
 % 'baseline_adjusted' and 'nonneg' are not only non-negative but also denoised.
+
+% opts.avg_event_tau = 72;
+% opts.remove_background = true;
+% opts.save_path = fullfile(fileparts(mfilename('fullpath')), ['output_' src_name '_correct_baseline.mat']);
 
 %opts.num_partitions_x = 2; opts.num_partitions_y = 2;
 

@@ -39,6 +39,8 @@ force_rebuild_h5 = get_opt(opts, 'force_rebuild_h5', false);
 thresholds = get_opt(opts, 'thresholds', struct());
 num_partitions_x = get_opt(opts, 'num_partitions_x', []);
 num_partitions_y = get_opt(opts, 'num_partitions_y', []);
+avg_event_tau = get_opt(opts, 'avg_event_tau', []);
+remove_background = get_opt(opts, 'remove_background', []);
 
 if ispc
     default_fast_h5_dir = fullfile('E:\', 'EXTRACT-cache');
@@ -132,6 +134,12 @@ if ~isempty(cellfind_max_steps)
 end
 if ~isempty(trace_output_option)
     config.trace_output_option = trace_output_option;
+end
+if ~isempty(avg_event_tau)
+    config.avg_event_tau = avg_event_tau;
+end
+if ~isempty(remove_background)
+    config.remove_background = logical(remove_background);
 end
 config.verbose = verbose;
 config.thresholds.eccent_thresh = get_opt(thresholds, 'eccent_thresh', 2);
