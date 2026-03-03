@@ -19,8 +19,7 @@ script_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(script_dir);
 
 dataset_name = get_opt(opts, 'dataset_name', '/mov');
-chunk_frames = get_opt(opts, 'chunk_frames', 1000);
-chunk_t = get_opt(opts, 'chunk_t', []);
+chunk_t = get_opt(opts, 'chunk_t', 128);
 chunk_x = get_opt(opts, 'chunk_x', []);
 chunk_y = get_opt(opts, 'chunk_y', []);
 target_chunk_mb = get_opt(opts, 'target_chunk_mb', 16);
@@ -88,10 +87,10 @@ else
     if use_python_converter
         python_exe = resolve_python_exe(python_exe);
         run_python_tiff_to_h5( ...
-            fast_tiff_path, h5_path, dataset_name, chunk_frames, ...
+            fast_tiff_path, h5_path, dataset_name, ...
             chunk_t, chunk_x, chunk_y, target_chunk_mb, python_exe, script_dir);
     else
-        convert_tiff_to_h5_chunked_uint16(fast_tiff_path, h5_path, dataset_name, chunk_frames);
+        convert_tiff_to_h5_chunked_uint16(fast_tiff_path, h5_path, dataset_name, chunk_t);
     end
 end
 
@@ -197,7 +196,7 @@ else
 end
 end
 
-function convert_tiff_to_h5_chunked_uint16(input_tiff, output_h5, dataset_name, chunk_frames)
+function convert_tiff_to_h5_chunked_uint16(input_tiff, output_h5, dataset_name, chunk_t)
 tiff_info = imfinfo(input_tiff);
 [height, width] = deal(tiff_info(1).Height, tiff_info(1).Width);
 num_ifd = numel(tiff_info);
@@ -213,10 +212,10 @@ end
 % HDF5 requires chunk byte size < 4GB.
 bytes_per_frame = double(height) * double(width) * 2; % uint16
 max_chunk_frames = max(floor((4 * 1024^3 - 1) / bytes_per_frame), 1);
-effective_chunk_frames = min(chunk_frames, max_chunk_frames);
-if effective_chunk_frames < chunk_frames
-    fprintf(['chunk_frames=%d is too large for HDF5 chunk limit. ', ...
-        'Using %d instead.\n'], chunk_frames, effective_chunk_frames);
+effective_chunk_frames = min(chunk_t, max_chunk_frames);
+if effective_chunk_frames < chunk_t
+    fprintf(['chunk_t=%d is too large for HDF5 chunk limit. ', ...
+        'Using %d instead.\n'], chunk_t, effective_chunk_frames);
 end
 h5create(output_h5, dataset_name, [height, width, total_frames], ...
     'Datatype', 'uint16', ...
@@ -302,7 +301,7 @@ end
 clear cleanup_fid
 end
 
-function run_python_tiff_to_h5(input_tiff, output_h5, dataset_name, chunk_frames, ...
+function run_python_tiff_to_h5(input_tiff, output_h5, dataset_name, ...
     chunk_t, chunk_x, chunk_y, target_chunk_mb, python_exe, script_dir)
 py_script = fullfile(script_dir, 'tiff_to_h5_fast.py');
 if ~isfile(py_script)
@@ -311,11 +310,8 @@ end
 
 % Use unbuffered Python + MATLAB echo mode so progress is shown live.
 cmd = sprintf(['"%s" -u "%s" --input "%s" --output "%s" --dataset "%s" ', ...
-    '--chunk-frames %d --target-chunk-mb %.2f'], ...
-    python_exe, py_script, input_tiff, output_h5, dataset_name, chunk_frames, target_chunk_mb);
-if ~isempty(chunk_t)
-    cmd = sprintf('%s --chunk-t %d', cmd, chunk_t);
-end
+    '--chunk-t %d --target-chunk-mb %.2f'], ...
+    python_exe, py_script, input_tiff, output_h5, dataset_name, chunk_t, target_chunk_mb);
 if ~isempty(chunk_x)
     cmd = sprintf('%s --chunk-x %d', cmd, chunk_x);
 end

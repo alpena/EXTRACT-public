@@ -5,7 +5,6 @@ input_tiff = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC
 
 opts = struct();
 opts.dataset_name = '/mov';
-opts.chunk_frames = 1000;
 % For faster XY-partition reads in EXTRACT, use tiled chunks:
 opts.chunk_t = 96;
 opts.chunk_x = 256;

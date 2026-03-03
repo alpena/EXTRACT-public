@@ -7,7 +7,7 @@ Supports:
   - ImageJ stack TIFF
 
 Usage:
-  python tiff_to_h5_fast.py --input <input.tif> --output <output.h5> --dataset /mov --chunk-frames 1000
+  python tiff_to_h5_fast.py --input <input.tif> --output <output.h5> --dataset /mov --chunk-t 128
   python tiff_to_h5_fast.py --input <input.tif> --output <output.h5> --chunk-t 96 --chunk-x 256 --chunk-y 256
 """
 
@@ -29,8 +29,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--input", required=True, help="Input TIFF path")
     p.add_argument("--output", required=True, help="Output H5 path")
     p.add_argument("--dataset", default="/mov", help="Dataset name in H5 (default: /mov)")
-    p.add_argument("--chunk-frames", type=int, default=200, help="Legacy time-chunk option (same as --chunk-t)")
-    p.add_argument("--chunk-t", type=int, default=0, help="Chunk size along time axis")
+    p.add_argument("--chunk-t", type=int, default=128, help="Chunk size along time axis")
     p.add_argument("--chunk-x", type=int, default=0, help="Chunk size along x axis (stored x)")
     p.add_argument("--chunk-y", type=int, default=0, help="Chunk size along y axis (stored y)")
     p.add_argument("--target-chunk-mb", type=float, default=16.0, help="Target chunk size in MiB for auto chunking")
@@ -102,16 +101,13 @@ def main() -> int:
     in_path = args.input
     out_path = args.output
     dset_name = normalize_dataset_name(args.dataset)
-    chunk_frames_req = int(args.chunk_frames)
     chunk_t_req = int(args.chunk_t)
     chunk_x_req = int(args.chunk_x)
     chunk_y_req = int(args.chunk_y)
     target_chunk_mb = float(args.target_chunk_mb)
 
-    if chunk_frames_req < 1:
-        raise ValueError("chunk-frames must be >= 1")
-    if chunk_t_req < 0 or chunk_x_req < 0 or chunk_y_req < 0:
-        raise ValueError("chunk-t/chunk-x/chunk-y must be >= 0")
+    if chunk_t_req < 1 or chunk_x_req < 0 or chunk_y_req < 0:
+        raise ValueError("chunk-t must be >= 1 and chunk-x/chunk-y must be >= 0")
     if target_chunk_mb <= 0:
         raise ValueError("target-chunk-mb must be > 0")
     if not os.path.isfile(in_path):
@@ -139,9 +135,8 @@ def main() -> int:
             raise ValueError(f"Expected uint16 TIFF, got {dtype}")
 
         # Stored shape is (t, x, y), so width/height map to x/y chunking.
-        chunk_t_base_req = chunk_t_req if chunk_t_req > 0 else chunk_frames_req
         chunk_t_max = max_chunk_frames(height, width, 2)
-        chunk_t = min(chunk_t_base_req, chunk_t_max, total_frames)
+        chunk_t = min(chunk_t_req, chunk_t_max, total_frames)
         chunk_x = chunk_x_req if chunk_x_req > 0 else min(width, 256)
         chunk_y = chunk_y_req if chunk_y_req > 0 else min(height, 256)
 

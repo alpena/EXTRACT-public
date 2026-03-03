@@ -60,9 +60,10 @@ Examples:
 
 ## 5. Performance-related defaults
 
-- Python converter chunk target: `chunk_frames = 1000`
-- If RAM is tight, reduce to `500`.
-- If RAM is abundant, try `1500-2000`.
+- Python converter chunk target: `chunk_t` (recommended start: `96-256`)
+- For XY-partitioned EXTRACT reads, set `chunk_x`/`chunk_y` (recommended start: `256/256`)
+- If RAM is tight, reduce `chunk_t`.
+- If RAM is abundant, increase `chunk_t` (and optionally `chunk_x/y`).
 - HDF5 chunk limit (< 4GB per chunk) is handled automatically.
 
 ## 6. Typical execution flow
@@ -81,9 +82,9 @@ Examples:
   - Install missing Python packages in the same interpreter.
 - Slow conversion:
   - Confirm source and destination are both on fast drive.
-  - Increase `chunk_frames` if RAM allows.
+  - Increase `chunk_t` if RAM allows.
 - HDF5 chunk-size errors:
-  - Do not force extremely high `chunk_frames`; the script auto-clamps.
+  - Do not force extremely high chunk sizes; the script auto-clamps.
 
 ## 8. Notes for reproducibility
 

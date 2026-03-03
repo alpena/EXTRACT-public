@@ -9,13 +9,13 @@ input_tiff = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
 output_h5 = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
     '1pMCRI-demo', '250206-UK6-1-F=4_power=5mW_reg_t_crop_s_full.h5');
 dataset_name = '/mov';
-chunk_frames = 200;
+chunk_t = 200;
 
 if ~isfile(input_tiff)
     error('Input TIFF not found: %s', input_tiff);
 end
-if chunk_frames < 1 || floor(chunk_frames) ~= chunk_frames
-    error('chunk_frames must be a positive integer.');
+if chunk_t < 1 || floor(chunk_t) ~= chunk_t
+    error('chunk_t must be a positive integer.');
 end
 
 tiff_info = imfinfo(input_tiff);
@@ -32,10 +32,10 @@ if isfile(output_h5)
     delete(output_h5);
 end
 
-% Use chunk size [h,w,chunk_frames] for streaming write.
+% Use chunk size [h,w,chunk_t] for streaming write.
 h5create(output_h5, dataset_name, [height, width, total_frames], ...
     'Datatype', 'uint16', ...
-    'ChunkSize', [height, width, min(chunk_frames, total_frames)]);
+    'ChunkSize', [height, width, min(chunk_t, total_frames)]);
 
 machinefmt = detect_tiff_byte_order(input_tiff);
 strip_offset = [];
@@ -70,10 +70,10 @@ if is_imagej_single_ifd
     cleanup_fid = onCleanup(@() fclose(fid));
 end
 
-num_chunks = ceil(total_frames / chunk_frames);
+num_chunks = ceil(total_frames / chunk_t);
 for i = 1:num_chunks
-    f_begin = (i - 1) * chunk_frames + 1;
-    f_end = min(i * chunk_frames, total_frames);
+    f_begin = (i - 1) * chunk_t + 1;
+    f_end = min(i * chunk_t, total_frames);
     n_this = f_end - f_begin + 1;
 
     fprintf('Chunk %d/%d: frames %d-%d\n', i, num_chunks, f_begin, f_end);
