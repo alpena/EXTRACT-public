@@ -18,10 +18,12 @@ opts.gpu_id = 1;
 opts.use_gpu = true;
 opts.parallel_cpu = false;
 opts.force_rebuild_h5 = false;
-opts.cellfind_max_steps = 1500; % max ROI candidates per partition
-% opts.trace_output_option = 'baseline_adjusted'; % e.g., 'none','nonneg'
+opts.cellfind_max_steps = 2000; % max ROI candidates per partition
+opts.trace_output_option = 'no_constraint'; % e.g., 'baseline_adjusted','no_constraint','nonneg'
+% NOTE: 'no_constraint' is closest to the raw overlap-separated trace output.
+% 'baseline_adjusted' and 'nonneg' are not only non-negative but also denoised.
 
-%opts.num_partitions_x = 5; opts.num_partitions_y = 5;
+%opts.num_partitions_x = 2; opts.num_partitions_y = 2;
 
 % Optional threshold overrides
 opts.thresholds = struct();
