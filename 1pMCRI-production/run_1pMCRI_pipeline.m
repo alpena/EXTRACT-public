@@ -32,6 +32,7 @@ downsample_time_by = get_opt(opts, 'downsample_time_by', 5);
 max_iter = get_opt(opts, 'max_iter', 6);
 cellfind_max_steps = get_opt(opts, 'cellfind_max_steps', []);
 verbose = get_opt(opts, 'verbose', 2);
+trace_output_option = get_opt(opts, 'trace_output_option', '');
 use_gpu = get_opt(opts, 'use_gpu', true);
 parallel_cpu = get_opt(opts, 'parallel_cpu', false);
 force_rebuild_h5 = get_opt(opts, 'force_rebuild_h5', false);
@@ -128,6 +129,9 @@ config.avg_cell_radius = avg_cell_radius;
 config.max_iter = max_iter;
 if ~isempty(cellfind_max_steps)
     config.cellfind_max_steps = cellfind_max_steps;
+end
+if ~isempty(trace_output_option)
+    config.trace_output_option = trace_output_option;
 end
 config.verbose = verbose;
 config.thresholds.eccent_thresh = get_opt(thresholds, 'eccent_thresh', 2);
