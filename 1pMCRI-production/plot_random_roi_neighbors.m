@@ -2,10 +2,10 @@
 % Layout: nexttile(5,3), col1=spatial, col2=temporal, col3=correlation
 
 result_path = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
-    '1pMCRI-production', 'output_250810-Ras2-GC#78_reg_s_crop.mat');
+    '1pMCRI-production', 'output_250810-Ras2-GC#78_reg.mat');
 rng_seed = 1;
 n_query = 5;
-n_neighbors = 8;
+n_neighbors = 5;
 fixed_half_window = 20; % 2*120+1 = 241 px window
 
 script_dir = fileparts(mfilename('fullpath'));
@@ -28,20 +28,22 @@ if ~isfield(output, 'spatial_weights') || ~isfield(output, 'temporal_weights')
 end
 
 S = output.spatial_weights;
-if isa(S, 'ndSparse')
-    S = full(S);
+S_size = size(S);
+if numel(S_size) ~= 3
+    error('output.spatial_weights must be 3D-like. Got size: %s', mat2str(S_size));
 end
-S = single(S);
 
 T = output.temporal_weights'; % cells x frames
 T = single(T);
 
-[h, w, n_cells] = size(S);
+[h, w, n_cells] = deal(S_size(1), S_size(2), S_size(3));
 % Background image for spatial overlays.
 if isfield(output, 'info') && isfield(output.info, 'summary_image') && ~isempty(output.info.summary_image)
     bg = single(output.info.summary_image);
 else
-    bg = max(S, [], 3);
+    % Avoid full expansion for sparse/ndSparse spatial weights.
+    warning('summary_image is missing; using zeros background to avoid full(S) OOM.');
+    bg = zeros(h, w, 'single');
 end
 bg = bg - min(bg(:));
 if max(bg(:)) > 0
@@ -54,11 +56,30 @@ cx = nan(n_cells, 1, 'single');
 cy = nan(n_cells, 1, 'single');
 for k = 1:n_cells
     m = S(:, :, k);
-    m(m < 0) = 0;
-    s = sum(m(:));
-    if s > 0
-        cx(k) = sum(m(:) .* Xgrid(:)) / s;
-        cy(k) = sum(m(:) .* Ygrid(:)) / s;
+
+    if issparse(m)
+        [rr, cc, vv] = find(m);
+        keep = vv > 0;
+        rr = rr(keep);
+        cc = cc(keep);
+        vv = single(vv(keep));
+        s = sum(vv);
+        if s > 0
+            cx(k) = sum(vv .* single(cc)) / s;
+            cy(k) = sum(vv .* single(rr)) / s;
+        end
+    else
+        m = single(m);
+        m(m < 0) = 0;
+        s = sum(m(:));
+        if s > 0
+            cx(k) = sum(m(:) .* Xgrid(:)) / s;
+            cy(k) = sum(m(:) .* Ygrid(:)) / s;
+        end
+    end
+
+    if mod(k, 500) == 0
+        fprintf('Computed centroids: %d / %d\n', k, n_cells);
     end
 end
 
@@ -104,6 +125,10 @@ for r = 1:n_query
     for j = 1:numel(ids)
         roi = S(:, :, ids(j));
         roi_crop = roi(ymin:ymax, xmin:xmax);
+        if issparse(roi_crop)
+            roi_crop = full(roi_crop);
+        end
+        roi_crop = single(roi_crop);
         t = max(roi_crop(:)) * 0.20;
         if t <= 0
             continue;
