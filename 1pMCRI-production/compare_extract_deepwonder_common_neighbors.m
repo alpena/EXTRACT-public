@@ -1,22 +1,27 @@
-%% Compare EXTRACT vs DeepWonder using registered spatial maps and neighbor analysis
-% 1) Register EXTRACT crop to DeepWonder full FOV using aggregate spatial maps
-% 2) Match likely common cells by transformed centroid proximity
+%% Compare EXTRACT vs DeepWonder (same FOV) using neighbor analysis
+% 1) Assume EXTRACT and DeepWonder are already in the same FOV coordinates
+% 2) Match likely common cells by centroid proximity
 % 3) For random query cells, compare query+neighbors (EXTRACT style) across methods
 %
 % Output:
-% - extract_deepwonder_registration.png
+% - extract_deepwonder_fov_overlay.png
 % - extract_deepwonder_common_neighbors.png
 
 extract_mat = fullfile(fileparts(fileparts(mfilename('fullpath'))), ...
     '1pMCRI-production', 'output_250810-Ras2-GC#78_reg_s_crop.mat');
-deep_dir = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\RSM_250810-Ras2-GC#78_reg_20250812-1449\mat';
+deep_dir = 'R:\data\manipulandum\target_reach\demo_data\RSM_250810-Ras2-GC#78_reg_s_crop_20260304-1115\mat';
 out_dir = fullfile(fileparts(fileparts(mfilename('fullpath'))), '1pMCRI-production');
+script_dir = fileparts(mfilename('fullpath'));
+repo_root = fileparts(script_dir);
+addpath(genpath(fullfile(repo_root, 'EXTRACT')));
+addpath(genpath(fullfile(repo_root, 'External algorithms')));
 
 rng_seed = 1;
 n_query = 5;
-n_neighbors = 8;
+n_neighbors = 3;
 max_match_dist_px = 15;
 fixed_half_window = 120;
+temporal_norm_mode = 'zscore'; % 'none' | 'zscore' | 'robust_zscore'
 
 if ~isfile(extract_mat)
     error('EXTRACT output not found: %s', extract_mat);
@@ -61,9 +66,11 @@ end
 valid_ex = find(isfinite(cx_ex) & isfinite(cy_ex));
 
 %% Load DeepWonder metadata + aggregate map
-% Deep positions are 0-based in these files. Convert to MATLAB 1-based.
-h_dw = 1700;
-w_dw = 1900;
+% Position coordinates may be 0-based or 1-based depending on export.
+% We auto-detect and map to MATLAB 1-based indexing.
+% Same-FOV assumption: use EXTRACT movie size as reference canvas.
+h_dw = h_ex;
+w_dw = w_ex;
 map_dw = zeros(h_dw, w_dw, 'single');
 cx_dw = [];
 cy_dw = [];
@@ -71,6 +78,7 @@ file_id_dw = [];
 local_id_dw = [];
 
 fprintf('Building DeepWonder aggregate map and centroid table...\n');
+coord_offset = [];
 for fi = 1:numel(deep_files)
     fpath = fullfile(deep_files(fi).folder, deep_files(fi).name);
     D = load(fpath, 'final_mask_list');
@@ -85,8 +93,16 @@ for fi = 1:numel(deep_files)
         if isempty(p)
             continue;
         end
-        y = p(:, 1) + 1;
-        x = p(:, 2) + 1;
+        if isempty(coord_offset)
+            if min(p(:)) <= 0
+                coord_offset = 1; % 0-based input
+            else
+                coord_offset = 0; % already 1-based
+            end
+            fprintf('Detected DeepWonder coordinate offset = +%d\n', coord_offset);
+        end
+        y = p(:, 1) + coord_offset;
+        x = p(:, 2) + coord_offset;
         valid = y >= 1 & y <= h_dw & x >= 1 & x <= w_dw;
         if ~any(valid)
             continue;
@@ -105,8 +121,8 @@ for fi = 1:numel(deep_files)
 
         if isfield(e, 'centroid') && ~isempty(e.centroid) && numel(e.centroid) >= 2
             c = double(e.centroid(:)');
-            cy_loc(k) = single(c(1) + 1);
-            cx_loc(k) = single(c(2) + 1);
+            cy_loc(k) = single(c(1) + coord_offset);
+            cx_loc(k) = single(c(2) + coord_offset);
         else
             cy_loc(k) = single(mean(y));
             cx_loc(k) = single(mean(x));
@@ -129,25 +145,11 @@ if n_dw == 0
     error('No valid DeepWonder cells found.');
 end
 
-%% Registration: find EXTRACT crop location in DeepWonder FOV by NCC
-c = normxcorr2(map_ex, map_dw);
-[~, imax] = max(abs(c(:)));
-[ypeak, xpeak] = ind2sub(size(c), imax);
-yoff = ypeak - size(map_ex, 1);
-xoff = xpeak - size(map_ex, 2);
-row0 = yoff + 1;
-col0 = xoff + 1;
-fprintf('Registration offset: row0=%d, col0=%d\n', row0, col0);
-
-% Transformed EXTRACT centroids in DeepWonder coordinates
-cx_ex_dw = cx_ex + single(col0 - 1);
-cy_ex_dw = cy_ex + single(row0 - 1);
-
 %% Cell matching by centroid proximity (one-to-one greedy)
 % Compute nearest DeepWonder cell for each valid EXTRACT cell.
 ex_idx = valid_ex(:);
-exx = double(cx_ex_dw(ex_idx));
-exy = double(cy_ex_dw(ex_idx));
+exx = double(cx_ex(ex_idx));
+exy = double(cy_ex(ex_idx));
 dwx = double(cx_dw(:)');
 dwy = double(cy_dw(:)');
 
@@ -201,9 +203,9 @@ neighbor_ex_sets = cell(nq, 1);
 neighbor_dw_sets = cell(nq, 1);
 for r = 1:nq
     q = q_ex(r);
-    exx0 = double(cx_ex_dw(match_ex));
-    exy0 = double(cy_ex_dw(match_ex));
-    d2 = (exx0 - double(cx_ex_dw(q))).^2 + (exy0 - double(cy_ex_dw(q))).^2;
+    exx0 = double(cx_ex(match_ex));
+    exy0 = double(cy_ex(match_ex));
+    d2 = (exx0 - double(cx_ex(q))).^2 + (exy0 - double(cy_ex(q))).^2;
     [~, od] = sort(d2, 'ascend');
     nn = match_ex(od(2:min(n_neighbors + 1, numel(od))));
     ids_ex = [q; nn(:)];
@@ -229,30 +231,24 @@ for fi = unique(file_id_dw(needed_dw))'
         k = double(local_id_dw(g));
         e = L{k};
         p = double(e.position);
-        deep_cache(g).position = [p(:,1)+1, p(:,2)+1];
+        deep_cache(g).position = [p(:,1)+coord_offset, p(:,2)+coord_offset];
         deep_cache(g).trace = single(e.trace(:)');
     end
 end
 
-%% Figure 1: registration overview
+%% Figure 1: same-FOV overlay overview
 f_reg = figure('Color', 'w', 'Position', [80 80 1400 700]);
 tiledlayout(1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 nexttile;
 imagesc(map_dw); axis image off; colormap(gray);
-title('DeepWonder aggregate spatial map');
-hold on;
-rectangle('Position', [col0, row0, w_ex, h_ex], 'EdgeColor', [1 0 0], 'LineWidth', 2);
-hold off;
+title('DeepWonder aggregate spatial map (same FOV)');
 nexttile;
-overlay = zeros(h_dw, w_dw, 3, 'single');
+overlay = zeros(h_ex, w_ex, 3, 'single');
 overlay(:, :, 2) = map_dw; % green
-r1 = max(1, row0); r2 = min(h_dw, row0 + h_ex - 1);
-c1 = max(1, col0); c2 = min(w_dw, col0 + w_ex - 1);
-ex_crop = map_ex(1:(r2-r1+1), 1:(c2-c1+1));
-overlay(r1:r2, c1:c2, 1) = ex_crop; % red
+overlay(:, :, 1) = map_ex; % red
 imagesc(overlay); axis image off;
-title('Registration overlay (red=EXTRACT, green=DeepWonder)');
-out_reg = fullfile(out_dir, 'extract_deepwonder_registration.png');
+title('Direct overlay (red=EXTRACT, green=DeepWonder)');
+out_reg = fullfile(out_dir, 'extract_deepwonder_fov_overlay.png');
 exportgraphics(f_reg, out_reg, 'Resolution', 180);
 
 %% Figure 2: matched query + neighbors comparison
@@ -275,8 +271,8 @@ for r = 1:n_query
     cmap(1,:) = [1.0 0.2 0.1];
 
     q = ids_ex(1);
-    qx = double(cx_ex_dw(q));
-    qy = double(cy_ex_dw(q));
+    qx = double(cx_ex(q));
+    qy = double(cy_ex(q));
     xmin = max(1, floor(qx - fixed_half_window));
     xmax = min(w_dw, ceil(qx + fixed_half_window));
     ymin = max(1, floor(qy - fixed_half_window));
@@ -290,10 +286,10 @@ for r = 1:n_query
     hold on;
     for j = 1:nset
         roi_ex = S_ex(:, :, ids_ex(j));
-        % Draw EXTRACT contour in deep coordinates
+        % Draw EXTRACT contour in same-FOV coordinates
         t = max(roi_ex(:)) * 0.2;
         if t > 0
-            contour((1:w_ex) + (col0 - 1), (1:h_ex) + (row0 - 1), roi_ex, [t t], ...
+            contour(1:w_ex, 1:h_ex, roi_ex, [t t], ...
                 'Color', cmap(j,:), 'LineWidth', 1.4);
         end
         p_dw = deep_cache(ids_dw(j)).position;
@@ -315,16 +311,16 @@ for r = 1:n_query
         if numel(tr_dw) ~= numel(tr_ex)
             tr_dw = interp1(1:numel(tr_dw), tr_dw, linspace(1, numel(tr_dw), numel(tr_ex)), 'linear', 'extrap');
         end
-        tr_ex = tr_ex - median(tr_ex);
-        tr_dw = tr_dw - median(tr_dw);
+        tr_ex = normalize_trace_for_compare(tr_ex, temporal_norm_mode);
+        tr_dw = normalize_trace_for_compare(tr_dw, temporal_norm_mode);
         Tex(j,:) = tr_ex;
         Tdw(j,:) = tr_dw;
         plot(tr_ex, '-', 'Color', cmap(j,:), 'LineWidth', 1.1);
         plot(tr_dw, '--', 'Color', cmap(j,:), 'LineWidth', 1.0);
     end
     grid on; box on;
-    xlabel('Frame'); ylabel('a.u.');
-    title('Temporal (solid=EXTRACT, dashed=DeepWonder)');
+    xlabel('Frame'); ylabel('normalized a.u.');
+    title(sprintf('Temporal (%s, solid=EXTRACT, dashed=DeepWonder)', temporal_norm_mode));
     hold(ax2, 'off');
 
     % Col3: EXTRACT correlation
@@ -349,3 +345,26 @@ exportgraphics(f_cmp, out_cmp, 'Resolution', 180);
 
 fprintf('Saved: %s\n', out_reg);
 fprintf('Saved: %s\n', out_cmp);
+
+function y = normalize_trace_for_compare(x, mode)
+x = single(x(:)');
+switch lower(mode)
+    case 'none'
+        y = x - median(x, 'omitnan');
+    case 'zscore'
+        mu = mean(x, 'omitnan');
+        sd = std(x, 0, 'omitnan');
+        if sd < eps('single')
+            y = zeros(size(x), 'single');
+        else
+            y = (x - mu) ./ sd;
+        end
+    case 'robust_zscore'
+        med = median(x, 'omitnan');
+        mad_val = median(abs(x - med), 'omitnan');
+        scale = max(1.4826 * mad_val, eps('single'));
+        y = (x - med) ./ scale;
+    otherwise
+        error('Unknown temporal_norm_mode: %s', mode);
+end
+end
