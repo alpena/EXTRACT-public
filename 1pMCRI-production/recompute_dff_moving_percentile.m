@@ -1,9 +1,9 @@
-%% Recompute dF/F from EXTRACT temporal_weights using moving percentile
+%% Recompute dF/F from EXTRACT temporal_weights using percentile baseline
 % Uses output.info.F_per_pixel as per-cell baseline anchor:
 %   F0_cell(i) = weighted mean of F_per_pixel with spatial_weights(:, :, i)
 % Then computes:
 %   F_est(i,t)   = temporal_weights(i,t) + F0_cell(i)
-%   F0_t(i,t)    = moving percentile of F_est(i,:) within +-window_sec
+%   F0_t(i,t)    = percentile baseline of F_est(i,:)
 %   dFF(i,t)     = (F_est(i,t) - F0_t(i,t)) / max(F0_t(i,t), eps)
 %
 % Notes:
@@ -15,7 +15,8 @@ result_path = fullfile(fileparts(mfilename('fullpath')), ...
 
 frame_rate_hz = 30;
 half_window_sec = 60;     % +-60 s window
-percentile_q = 8;         % moving percentile
+percentile_q = 8;         % baseline percentile
+baseline_mode = 'global_percentile';  % 'global_percentile'(default) | 'moving_percentile'
 save_output = true;
 plot_n_cells = 5;
 rng_seed = 1;
@@ -66,20 +67,30 @@ F0_cell = compute_f0_cell(S2, Fpix); % [n_cells x 1]
 % Build F estimate
 F_est = bsxfun(@plus, T, F0_cell);
 
-% Moving percentile baseline with +-half_window_sec
-win = max(5, round(2 * half_window_sec * frame_rate_hz) + 1);
-if mod(win, 2) == 0
-    win = win + 1;
-end
-fprintf(['Computing moving percentile baseline: q=%g, fs=%.3f Hz, ', ...
-    'window=%d frames (~%.1f sec)\n'], percentile_q, frame_rate_hz, win, win / frame_rate_hz);
+baseline_mode = lower(strtrim(char(baseline_mode)));
+win = NaN;
+switch baseline_mode
+    case 'global_percentile'
+        fprintf('Computing global percentile baseline: q=%g over full trace\n', percentile_q);
+        F0_const = single(prctile(F_est, percentile_q, 2)); % [cells x 1]
+        F0_t = bsxfun(@times, F0_const, ones(1, n_frames, 'single'));
+    case 'moving_percentile'
+        win = max(5, round(2 * half_window_sec * frame_rate_hz) + 1);
+        if mod(win, 2) == 0
+            win = win + 1;
+        end
+        fprintf(['Computing moving percentile baseline: q=%g, fs=%.3f Hz, ', ...
+            'window=%d frames (~%.1f sec)\n'], percentile_q, frame_rate_hz, win, win / frame_rate_hz);
 
-if exist('movprctile', 'file') == 2
-    F0_t = movprctile(F_est, percentile_q, win, 2, 'Endpoints', 'shrink');
-else
-    warning(['movprctile not available. Using exact compatibility fallback ', ...
-        '(prctile with Endpoints=''shrink''). This can be slow.']);
-    F0_t = movprctile_compat_exact(F_est, percentile_q, win, fallback_use_parfor);
+        if exist('movprctile', 'file') == 2
+            F0_t = movprctile(F_est, percentile_q, win, 2, 'Endpoints', 'shrink');
+        else
+            warning(['movprctile not available. Using exact compatibility fallback ', ...
+                '(prctile with Endpoints=''shrink''). This can be slow.']);
+            F0_t = movprctile_compat_exact(F_est, percentile_q, win, fallback_use_parfor);
+        end
+    otherwise
+        error('Unsupported baseline_mode: %s', baseline_mode);
 end
 
 dff = (F_est - F0_t) ./ max(F0_t, eps('single'));
@@ -91,8 +102,12 @@ rng(rng_seed);
 ids = randperm(n_cells, min(plot_n_cells, n_cells));
 f = figure('Color', 'w', 'Position', [60 60 1800 1100]);
 tlo = tiledlayout(numel(ids), 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-title(tlo, sprintf('Post-hoc dF/F from EXTRACT traces | q=%g, +-%.0f sec', ...
-    percentile_q, half_window_sec));
+if strcmp(baseline_mode, 'moving_percentile')
+    title(tlo, sprintf('Post-hoc dF/F | mode=moving q=%g, +-%.0f sec', ...
+        percentile_q, half_window_sec));
+else
+    title(tlo, sprintf('Post-hoc dF/F | mode=global q=%g', percentile_q));
+end
 
 for r = 1:numel(ids)
     cid = ids(r);
@@ -102,7 +117,11 @@ for r = 1:numel(ids)
     plot(F0_t(cid, :), 'Color', [0.85 0.2 0.2], 'LineWidth', 1.0);
     hold off;
     grid on;
-    title(sprintf('Cell %d: F_{est} and moving F0', cid));
+    if strcmp(baseline_mode, 'moving_percentile')
+        title(sprintf('Cell %d: F_{est} and moving F0', cid));
+    else
+        title(sprintf('Cell %d: F_{est} and global F0', cid));
+    end
     xlabel('Frame');
     ylabel('a.u.');
     if r == 1
@@ -117,19 +136,30 @@ for r = 1:numel(ids)
     ylabel('\DeltaF/F');
 end
 
-fig_png = fullfile(fileparts(result_path), 'recomputed_dff_moving_percentile.png');
+switch baseline_mode
+    case 'moving_percentile'
+        suffix = 'mp';
+        fig_png = fullfile(fileparts(result_path), 'recomputed_dff_moving_percentile.png');
+    case 'global_percentile'
+        suffix = 'gp';
+        fig_png = fullfile(fileparts(result_path), 'recomputed_dff_global_percentile.png');
+    otherwise
+        suffix = 'dff';
+        fig_png = fullfile(fileparts(result_path), 'recomputed_dff.png');
+end
 exportgraphics(f, fig_png, 'Resolution', 180);
 fprintf('Saved figure: %s\n', fig_png);
 
 if save_output
     [out_dir, out_name, ~] = fileparts(result_path);
-    out_mat = fullfile(out_dir, [out_name '_dff_mp.mat']);
+    out_mat = fullfile(out_dir, sprintf('%s_dff_%s.mat', out_name, suffix));
     meta = struct();
     meta.source_result_path = result_path;
     meta.frame_rate_hz = frame_rate_hz;
     meta.half_window_sec = half_window_sec;
     meta.percentile_q = percentile_q;
     meta.window_frames = win;
+    meta.baseline_mode = char(baseline_mode);
     meta.timestamp = char(datetime('now', 'Format', 'yyyy-MM-dd''T''HH:mm:ss'));
     save(out_mat, 'dff', 'F_est', 'F0_t', 'F0_cell', 'ids', 'meta', '-v7.3');
     fprintf('Saved dF/F mat: %s\n', out_mat);
