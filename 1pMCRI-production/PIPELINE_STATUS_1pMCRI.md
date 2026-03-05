@@ -4,13 +4,13 @@ This document summarizes the currently intended analysis pipeline for 1pMCRI dat
 It is a **WIP status note**, not a finalized SOP.
 
 ## Intended End-to-End Flow
-1. `.oir` -> **masknmf** for non-rigid registration
+1. `.dcimg` -> **masknmf** for non-rigid registration
 2. Registered movie -> **EXTRACT** for trace extraction
 3. Extracted traces -> **Cascade** for spike inference
 
 ## Stage 1: non-rigid registration (masknmf)
 ### Goal
-- Convert raw Olympus `.oir` recordings into motion-corrected (non-rigid registered) movies suitable for source extraction.
+- Convert raw Hamamatsu `.dcimg` recordings into motion-corrected (non-rigid registered) movies suitable for source extraction.
 
 ### Current status
 - Treated as an upstream preprocessing step.
