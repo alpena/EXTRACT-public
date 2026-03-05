@@ -1,17 +1,48 @@
-# 1pMCRI Production Pipeline
+# 1pMCRI Production Pipeline (H5-first)
 
-Environment and machine requirements for the TIFF->H5->EXTRACT pipeline:
-- `1pMCRI-production/PIPELINE_REQUIREMENTS.md`
+This folder is managed as an H5-first production pipeline for EXTRACT.
 
-## 1pMCRI minimal smoke test
+- Primary input: masknmf registration output H5
+- Primary runner: `1pMCRI-production/run_1pMCRI_pipeline.m`
+- Requirements: `1pMCRI-production/PIPELINE_REQUIREMENTS.md`
 
-1. Edit `1pMCRI-production/test_1pMCRI_minimal.m` and set `h5_path` + `dataset_name` for your movie.
-2. (Optional) Adjust `quick_n_frames`, `avg_cell_radius`, and `gpu_id`.
-3. Run `test_1pMCRI_minimal` from MATLAB.
+## Standard flow (recommended)
 
-The script runs EXTRACT with single-GPU settings and saves:
-- `output`
-- `config_used`
-- `meta`
+1. Input masknmf H5 (`/motion_corrected`)
+2. Read source H5 directly (no input copy)
+3. Convert to EXTRACT-optimized H5 (`/mov`)
+4. Run EXTRACT
+5. Save output MAT (`output`, `config_used`, `meta`)
 
-Default output file: `1pMCRI-production/test_1pMCRI_output_full.mat`.
+## Quick start (H5 input)
+
+```matlab
+opts = struct();
+opts.input_h5 = 'E:\EXTRACT-cache\moco_results_extract.h5';
+opts.python_exe = 'C:\Users\<user>\anaconda3\python.exe'; % optional
+opts.orientation_fix = 'none'; % 'none' | 'transpose_xy'
+R = run_1pMCRI_pipeline('', opts);
+```
+
+Notes:
+- masknmf input dataset is fixed to `/motion_corrected`.
+- EXTRACT always reads `/mov` from the optimized H5.
+- If orientation looks transposed, set `opts.orientation_fix = 'transpose_xy'`.
+
+## Key H5 options
+
+- `opts.input_h5`: input masknmf H5 path
+- `opts.h5_skip_if_exists` (default `true`)
+- `opts.h5_chunk_t/x/y` (default `256/256/256`)
+- `opts.h5_compression` (default `0`)
+- `opts.orientation_fix` (default `none`)
+
+## TIFF compatibility mode (optional)
+
+TIFF input remains supported for backward compatibility:
+
+```matlab
+R = run_1pMCRI_pipeline('R:\data\movie.tif', struct());
+```
+
+This path uses TIFF->H5 conversion before EXTRACT.

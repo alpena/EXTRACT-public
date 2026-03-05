@@ -1,6 +1,6 @@
-%% Replace preprocessed_data.mat pos/F with EXTRACT output
+%% Replace preprocessed_data.mat pos/F with EXTRACT + CASCADE output
 % - pos: ROI centroids in [x y] pixel coordinates (cells x 2)
-% - F:   temporal components as (cells x frames)
+% - F:   CASCADE spike_prob as (cells x frames)
 % - Optional: reapply coordinate transform saved in import_opt
 %   pos_mm = (pos_pix * pix_to_dist - center_pos) rotated by angle_deg.
 
@@ -12,12 +12,18 @@ addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 
 preprocessed_mat = fullfile(script_dir, 'preprocessed_data.mat');
 extract_output_mat = fullfile(script_dir, 'output_250810-Ras2-GC#78_reg.mat');
+cascade_mat = fullfile('R:\', 'code', 'Cascade', 'Example_datasets', ...
+    '1pMCRI_demo_outputs', 'cascade_prediction_1pMCRI_temporal_weights_allcells.mat');
+write_mode = 'matfile'; % 'matfile' (fast, recommended) | 'append'
 
 if ~isfile(preprocessed_mat)
     error('preprocessed_data.mat not found: %s', preprocessed_mat);
 end
 if ~isfile(extract_output_mat)
     error('EXTRACT output mat not found: %s', extract_output_mat);
+end
+if ~isfile(cascade_mat)
+    error('CASCADE mat not found: %s', cascade_mat);
 end
 
 % Load import options (if available) from existing preprocessed_data.mat
@@ -35,17 +41,6 @@ if ~isfield(E, 'output') || ~isfield(E.output, 'spatial_weights') || ~isfield(E.
 end
 
 S = E.output.spatial_weights;
-T = single(E.output.temporal_weights); % expected: frames x cells
-
-% Convert temporal to cells x frames
-if size(T, 1) < size(T, 2)
-    % If already cells x frames, keep as-is
-    F = T;
-else
-    % Common EXTRACT format: frames x cells
-    F = T';
-end
-F = double(F);
 
 % Build centroid positions from spatial weights
 if isa(S, 'ndSparse')
@@ -57,6 +52,22 @@ else
     S2 = reshape(S, h * w, n_cells);
     S2 = max(S2, 0);
 end
+
+% Load CASCADE spike_prob and convert to cells x frames.
+C = load(cascade_mat, 'spike_prob');
+if ~isfield(C, 'spike_prob') || isempty(C.spike_prob)
+    error('spike_prob not found in CASCADE mat: %s', cascade_mat);
+end
+spk = single(C.spike_prob);
+if size(spk, 1) == n_cells
+    F = spk;
+elseif size(spk, 2) == n_cells
+    F = spk';
+else
+    error(['Cell count mismatch: EXTRACT spatial cells=%d, ', ...
+        'CASCADE spike_prob size=[%d %d]'], n_cells, size(spk, 1), size(spk, 2));
+end
+F = single(F);
 
 if size(F, 1) ~= n_cells
     error('Cell count mismatch: spatial=%d, temporal(F rows)=%d', n_cells, size(F, 1));
@@ -89,11 +100,23 @@ pos_pix(:, 2) = -pos_pix(:, 2);
 [pos, transform_meta] = apply_import_opt_transform(pos_pix, import_opt);
 
 % Replace variables in preprocessed_data.mat
-save(preprocessed_mat, 'pos', 'F', '-append');
+switch lower(write_mode)
+    case 'matfile'
+        % Faster than save -append for large MAT files.
+        m = matfile(preprocessed_mat, 'Writable', true);
+        m.pos = pos;
+        m.F = F;
+    case 'append'
+        save(preprocessed_mat, 'pos', 'F', '-append');
+    otherwise
+        error('Unknown write_mode: %s', write_mode);
+end
 
 fprintf('Updated: %s\n', preprocessed_mat);
 fprintf('  pos size = [%d %d]\n', size(pos, 1), size(pos, 2));
 fprintf('  F   size = [%d %d]\n', size(F, 1), size(F, 2));
+fprintf('  write mode = %s\n', write_mode);
+fprintf('  F source = %s (spike_prob)\n', cascade_mat);
 fprintf('  transform: pix_to_dist=%g, center_pos=[%g %g], angle_deg=%g\n', ...
     transform_meta.pix_to_dist, transform_meta.center_pos(1), ...
     transform_meta.center_pos(2), transform_meta.angle_deg);

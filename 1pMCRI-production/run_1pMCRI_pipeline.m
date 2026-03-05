@@ -1,15 +1,14 @@
 function result = run_1pMCRI_pipeline(input_tiff, opts)
 % Standard 1pMCRI pipeline:
-% 1) Copy TIFF to fast drive cache
-% 2) Convert TIFF -> H5 (/mov)
-% 3) Run EXTRACT and save output MAT
+% - TIFF input: Copy TIFF to fast drive -> convert TIFF->H5 (/mov) -> EXTRACT
+% - H5 input  : Copy masknmf H5 to fast drive -> convert motion_corrected->/mov -> EXTRACT
 %
 % Usage:
 %   run_1pMCRI_pipeline('R:\path\movie.tif');
-%   run_1pMCRI_pipeline('R:\path\movie.tif', struct('gpu_id', 1));
+%   run_1pMCRI_pipeline('', struct('input_h5', 'R:\path\moco.h5'));
 
-if nargin < 1 || isempty(input_tiff)
-    error('input_tiff is required. Example: run_1pMCRI_pipeline(''R:\\data\\movie.tif'')');
+if nargin < 1
+    input_tiff = '';
 end
 if nargin < 2 || isempty(opts)
     opts = struct();
@@ -18,7 +17,18 @@ end
 script_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(script_dir);
 
-dataset_name = get_opt(opts, 'dataset_name', '/mov');
+input_h5 = get_opt(opts, 'input_h5', '');
+if isempty(input_tiff) && isempty(input_h5)
+    error(['Either input_tiff or opts.input_h5 is required. ', ...
+        'Example: run_1pMCRI_pipeline(''R:\\data\\movie.tif'')']);
+end
+if ~isempty(input_tiff) && ~isempty(input_h5)
+    error('Provide only one input source: input_tiff or opts.input_h5.');
+end
+
+dataset_name = normalize_dataset_name(get_opt(opts, 'dataset_name', '/mov')); % EXTRACT input dataset
+masknmf_dataset_name = '/motion_corrected'; % fixed by design
+
 chunk_t = get_opt(opts, 'chunk_t', 128);
 chunk_x = get_opt(opts, 'chunk_x', []);
 chunk_y = get_opt(opts, 'chunk_y', []);
@@ -36,6 +46,12 @@ trace_output_option = get_opt(opts, 'trace_output_option', '');
 use_gpu = get_opt(opts, 'use_gpu', true);
 parallel_cpu = get_opt(opts, 'parallel_cpu', false);
 force_rebuild_h5 = get_opt(opts, 'force_rebuild_h5', false);
+h5_skip_if_exists = get_opt(opts, 'h5_skip_if_exists', true);
+h5_chunk_t = get_opt(opts, 'h5_chunk_t', 256);
+h5_chunk_x = get_opt(opts, 'h5_chunk_x', 256);
+h5_chunk_y = get_opt(opts, 'h5_chunk_y', 256);
+h5_compression = get_opt(opts, 'h5_compression', 0);
+orientation_fix = get_opt(opts, 'orientation_fix', 'none'); % 'none' | 'transpose_xy'
 thresholds = get_opt(opts, 'thresholds', struct());
 num_partitions_x = get_opt(opts, 'num_partitions_x', []);
 num_partitions_y = get_opt(opts, 'num_partitions_y', []);
@@ -49,51 +65,87 @@ else
 end
 fast_h5_dir = get_opt(opts, 'fast_h5_dir', default_fast_h5_dir);
 
-[~, src_name, src_ext] = fileparts(input_tiff);
-fast_tiff_path = fullfile(fast_h5_dir, [src_name src_ext]);
-h5_path = get_opt(opts, 'h5_path', fullfile(fast_h5_dir, [src_name '.h5']));
+if ~exist(fast_h5_dir, 'dir')
+    mkdir(fast_h5_dir);
+end
+
+if ~isempty(input_h5)
+    source_input = input_h5;
+else
+    source_input = input_tiff;
+end
+[~, src_name, src_ext] = fileparts(source_input);
+default_h5_path = fullfile(fast_h5_dir, [src_name '.h5']);
+if ~isempty(input_h5)
+    default_h5_path = fullfile(fast_h5_dir, [src_name '_extract_opt.h5']);
+end
+h5_path = get_opt(opts, 'h5_path', default_h5_path);
 default_save_path = fullfile(repo_root, '1pMCRI-production', ['output_' src_name '.mat']);
 save_path = get_opt(opts, 'save_path', default_save_path);
+
+fast_source_path = fullfile(fast_h5_dir, [src_name src_ext]);
+fast_tiff_path = '';
+fast_input_h5_path = '';
 
 addpath(repo_root);
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 addpath(genpath(fullfile(repo_root, 'External algorithms')));
 addpath(genpath(fullfile(repo_root, 'Learning-materials')));
 
-%% Step 1: Copy TIFF to fast drive, then TIFF -> H5 (uint16, chunked)
-if ~isfile(input_tiff)
-    error('Input TIFF not found: %s', input_tiff);
-end
-if ~exist(fast_h5_dir, 'dir')
-    mkdir(fast_h5_dir);
-end
-
-src_info = dir(input_tiff);
-need_tiff_copy = true;
-if isfile(fast_tiff_path)
-    dst_info = dir(fast_tiff_path);
-    need_tiff_copy = ~(dst_info.bytes == src_info.bytes);
-end
-if need_tiff_copy
-    fprintf('Copying TIFF to fast drive...\nFrom: %s\nTo:   %s\n', input_tiff, fast_tiff_path);
-    copyfile(input_tiff, fast_tiff_path, 'f');
-else
-    fprintf('Using existing fast-drive TIFF: %s\n', fast_tiff_path);
-end
-
-if isfile(h5_path) && ~force_rebuild_h5
-    fprintf('H5 already exists. Skipping conversion: %s\n', h5_path);
-else
-    if isfile(h5_path) && force_rebuild_h5
-        delete(h5_path);
+%% Step 1: Prepare /mov H5 on fast drive
+if ~isempty(input_tiff)
+    if ~isfile(input_tiff)
+        error('Input TIFF not found: %s', input_tiff);
     end
-    if use_python_converter
-        python_exe = resolve_python_exe(python_exe);
-        run_python_tiff_to_h5( ...
-            fast_tiff_path, h5_path, dataset_name, ...
-            chunk_t, chunk_x, chunk_y, target_chunk_mb, python_exe, script_dir);
+    fast_tiff_path = copy_source_to_fast_drive(input_tiff, fast_source_path, 'TIFF');
+    if isfile(h5_path) && ~force_rebuild_h5
+        fprintf('H5 already exists. Skipping conversion: %s\n', h5_path);
     else
-        convert_tiff_to_h5_chunked_uint16(fast_tiff_path, h5_path, dataset_name, chunk_t);
+        if isfile(h5_path) && force_rebuild_h5
+            delete(h5_path);
+        end
+        if use_python_converter
+            python_exe = resolve_python_exe(python_exe);
+            run_python_tiff_to_h5( ...
+                fast_tiff_path, h5_path, dataset_name, ...
+                chunk_t, chunk_x, chunk_y, target_chunk_mb, python_exe, script_dir);
+        else
+            convert_tiff_to_h5_chunked_uint16(fast_tiff_path, h5_path, dataset_name, chunk_t);
+        end
+    end
+else
+    if ~isfile(input_h5)
+        error('Input H5 not found: %s', input_h5);
+    end
+    % H5-first flow: read source H5 directly (do not copy input H5).
+    fast_input_h5_path = input_h5;
+    fprintf('Using source H5 directly (no copy): %s\n', fast_input_h5_path);
+    if isfile(h5_path) && h5_skip_if_exists && ~force_rebuild_h5
+        fprintf('Optimized H5 already exists. Skipping conversion: %s\n', h5_path);
+    else
+        if isfile(h5_path)
+            delete(h5_path);
+        end
+        try
+            src_dims = h5info(fast_input_h5_path, masknmf_dataset_name).Dataspace.Size;
+        catch ME
+            root_info = h5info(fast_input_h5_path);
+            names = collect_h5_dataset_paths(root_info);
+            msg = sprintf(['Required dataset not found: %s in %s\nAvailable datasets:\n  %s'], ...
+                masknmf_dataset_name, fast_input_h5_path, strjoin(names, sprintf('\n  ')));
+            cause = MException('run_1pMCRI_pipeline:MissingMaskNmfDataset', msg);
+            cause = addCause(cause, ME);
+            throw(cause);
+        end
+        if numel(src_dims) ~= 3
+            error('Expected 3D movie in %s:%s', fast_input_h5_path, masknmf_dataset_name);
+        end
+        python_exe = resolve_python_exe(python_exe);
+        run_python_h5_to_h5( ...
+            fast_input_h5_path, h5_path, masknmf_dataset_name, dataset_name, ...
+            src_dims(1), src_dims(2), src_dims(3), ...
+            h5_chunk_t, h5_chunk_x, h5_chunk_y, h5_compression, ...
+            orientation_fix, python_exe, script_dir);
     end
 end
 
@@ -175,10 +227,13 @@ end
 config_used = output.config;
 meta = struct();
 meta.input_tiff = input_tiff;
+meta.input_h5 = input_h5;
 meta.fast_tiff_path = fast_tiff_path;
+meta.fast_input_h5_path = fast_input_h5_path;
 meta.h5_path = h5_path;
 meta.h5_fast_path = h5_fast_path;
 meta.dataset_name = dataset_name;
+meta.orientation_fix = orientation_fix;
 meta.frames_used = n_frames;
 meta.total_frames = total_frames;
 meta.movie_height = h;
@@ -399,4 +454,95 @@ end
 
 error(['No usable Python executable found. Set python_exe manually to your ', ...
     'Anaconda python path (Windows example: C:\\Users\\<user>\\anaconda3\\python.exe).']);
+end
+
+function p = normalize_dataset_name(p)
+if ~startsWith(p, '/')
+    p = ['/' p];
+end
+end
+
+function fast_path = copy_source_to_fast_drive(src_path, fast_path, label)
+src_info = dir(src_path);
+need_copy = true;
+if isfile(fast_path)
+    dst_info = dir(fast_path);
+    need_copy = ~(dst_info.bytes == src_info.bytes);
+end
+if need_copy
+    fprintf('Copying %s to fast drive...\nFrom: %s\nTo:   %s\n', label, src_path, fast_path);
+    copyfile(src_path, fast_path, 'f');
+else
+    fprintf('Using existing fast-drive %s: %s\n', label, fast_path);
+end
+end
+
+function run_python_h5_to_h5(input_h5, output_h5, input_dataset_name, output_dataset_name, ...
+    expected_h, expected_w, expected_t, chunk_t, chunk_x, chunk_y, compression, ...
+    orientation_fix, python_exe, script_dir)
+py_script = fullfile(script_dir, 'h5_to_h5_fast.py');
+if ~isfile(py_script)
+    error('Python H5 converter script not found: %s', py_script);
+end
+if ~strcmp(orientation_fix, 'none') && ~strcmp(orientation_fix, 'transpose_xy')
+    error('Unsupported orientation_fix: %s (use ''none'' or ''transpose_xy'').', orientation_fix);
+end
+
+cmd = sprintf(['"%s" -u "%s" --input "%s" --output "%s" ', ...
+    '--input-dataset "%s" --output-dataset "%s" ', ...
+    '--expected-height %d --expected-width %d --expected-frames %d ', ...
+    '--chunk-t %d --chunk-x %d --chunk-y %d --compression %d --orientation-fix %s'], ...
+    python_exe, py_script, input_h5, output_h5, ...
+    input_dataset_name, output_dataset_name, ...
+    expected_h, expected_w, expected_t, ...
+    chunk_t, chunk_x, chunk_y, compression, orientation_fix);
+fprintf('Running Python H5 optimizer:\n%s\n', cmd);
+
+try
+    status = system(cmd, '-echo');
+catch
+    [status, out] = system(cmd);
+    fprintf('%s\n', out);
+end
+if status ~= 0
+    error('Python H5->H5 conversion failed.');
+end
+
+out_info = h5info(output_h5, output_dataset_name);
+out_dims = out_info.Dataspace.Size;
+if numel(out_dims) ~= 3
+    error('Output dataset is not 3D: %s:%s', output_h5, output_dataset_name);
+end
+verify_expected_h = expected_h;
+verify_expected_w = expected_w;
+if strcmp(orientation_fix, 'transpose_xy')
+    verify_expected_h = expected_w;
+    verify_expected_w = expected_h;
+end
+if out_dims(1) ~= verify_expected_h || out_dims(2) ~= verify_expected_w || out_dims(3) ~= expected_t
+    error(['H5 dataset shape mismatch after conversion.\nExpected [%d %d %d], found [%d %d %d] ', ...
+        'for %s:%s'], ...
+        verify_expected_h, verify_expected_w, expected_t, out_dims(1), out_dims(2), out_dims(3), ...
+        output_h5, output_dataset_name);
+end
+end
+
+function names = collect_h5_dataset_paths(group_info)
+names = {};
+for i = 1:numel(group_info.Datasets)
+    dname = group_info.Datasets(i).Name;
+    gname = group_info.Name;
+    if strcmp(gname, '/')
+        names{end+1} = ['/' dname]; %#ok<AGROW>
+    else
+        names{end+1} = [gname '/' dname]; %#ok<AGROW>
+    end
+end
+for i = 1:numel(group_info.Groups)
+    child = collect_h5_dataset_paths(group_info.Groups(i));
+    names = [names child]; %#ok<AGROW>
+end
+if isempty(names)
+    names = {'<none>'};
+end
 end

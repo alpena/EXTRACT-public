@@ -1,18 +1,23 @@
-%% Run 1pMCRI standard pipeline for target_reach 250810 dataset
-% Edit options here if needed, then run this script.
+%% Run 1pMCRI standard pipeline for target_reach 250810 dataset (H5-first)
+% Edit options below, then run this script.
+%
+% Standard input is masknmf output H5 with dataset '/motion_corrected'.
+% run_1pMCRI_pipeline will convert it to optimized '/mov' H5 for EXTRACT.
 
-input_tiff = 'R:\data\manipulandum\target_reach\250810-Ras2-GC#78\250810-Ras2-GC#78_reg.tif';
-% input_tiff = 'R:\code\EXTRACT-public\1pMCRI-demo\250810-Ras2-GC#78_reg_s_crop.tif';
-[~, src_name, ~] = fileparts(input_tiff);
+input_h5 = 'R:\code\masknmf-toolbox\demo_data\output\250810-Ras2-GC#78_moco_t_crop.h5';
+% input_h5 = 'E:\EXTRACT-cache\moco_results_extract.h5';
+[~, src_name, ~] = fileparts(input_h5);
 
 opts = struct();
 opts.dataset_name = '/mov';
-% For faster XY-partition reads in EXTRACT, use tiled chunks:
-opts.chunk_t = 512;
-opts.chunk_x = 256;
-opts.chunk_y = 256;
-opts.use_python_converter = true;
+opts.input_h5 = input_h5;
 opts.python_exe = ''; % empty -> auto-detect (Conda/Anaconda preferred)
+opts.h5_skip_if_exists = true;  % skip conversion if optimized H5 already exists
+opts.h5_chunk_t = 256;
+opts.h5_chunk_x = 256;
+opts.h5_chunk_y = 256;
+opts.h5_compression = 0;
+opts.orientation_fix = 'transpose_xy'; % 'none' or 'transpose_xy'
 opts.quick_n_frames = inf;
 opts.avg_cell_radius = 6;
 opts.gpu_id = 1;
@@ -36,5 +41,5 @@ opts.thresholds.eccent_thresh = 2;
 opts.thresholds.size_lower_limit = 0.2;
 opts.thresholds.size_upper_limit = 2;
 
-R = run_1pMCRI_pipeline(input_tiff, opts);
+R = run_1pMCRI_pipeline('', opts);
 fprintf('Pipeline complete. Result file: %s\n', R.save_path);
