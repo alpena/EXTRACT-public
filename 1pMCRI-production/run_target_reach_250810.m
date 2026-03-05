@@ -4,7 +4,7 @@
 % Standard input is masknmf output H5 with dataset '/motion_corrected'.
 % run_1pMCRI_pipeline will convert it to optimized '/mov' H5 for EXTRACT.
 
-input_h5 = 'R:\code\masknmf-toolbox\demo_data\output\250810-Ras2-GC#78_moco_first500_smoke_direct.h5';
+input_h5 = 'R:\code\masknmf-toolbox\demo_data\output\250810-Ras2-GC#78_moco_first100_smoke_direct.h5';
 % input_h5 = 'E:\EXTRACT-cache\moco_results_extract.h5';
 [~, src_name, ~] = fileparts(input_h5);
 

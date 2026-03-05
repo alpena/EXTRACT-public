@@ -120,10 +120,9 @@ else
     if ~isfile(input_h5)
         error('Input H5 not found: %s', input_h5);
     end
-    % H5-first flow: read source H5 directly (do not copy input H5).
-    fast_input_h5_path = input_h5;
-    fprintf('Using source H5 directly (no copy): %s\n', fast_input_h5_path);
     if input_h5_preoptimized
+        % Preoptimized flow: copy input H5 to fast drive, then use it directly.
+        fast_input_h5_path = copy_source_to_fast_drive(input_h5, fast_source_path, 'H5');
         fprintf(['input_h5_preoptimized=true. Skipping H5 optimization and ', ...
             'using %s:%s directly.\n'], fast_input_h5_path, dataset_name);
         fprintf(['Ignoring optimization options: h5_skip_if_exists, h5_chunk_t/x/y, ', ...
@@ -144,9 +143,14 @@ else
         if numel(info_direct.Dataspace.Size) ~= 3
             error('Preoptimized input must be 3D at %s:%s', h5_path, dataset_name);
         end
-    elseif isfile(h5_path) && h5_skip_if_exists && ~force_rebuild_h5
-        fprintf('Optimized H5 already exists. Skipping conversion: %s\n', h5_path);
     else
+        % Non-preoptimized flow: read source H5 directly and convert to /mov.
+        fast_input_h5_path = input_h5;
+        fprintf('Using source H5 directly (no copy): %s\n', fast_input_h5_path);
+    end
+    if ~input_h5_preoptimized && isfile(h5_path) && h5_skip_if_exists && ~force_rebuild_h5
+        fprintf('Optimized H5 already exists. Skipping conversion: %s\n', h5_path);
+    elseif ~input_h5_preoptimized
         if isfile(h5_path)
             delete(h5_path);
         end
