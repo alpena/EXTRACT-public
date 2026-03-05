@@ -14,20 +14,33 @@ This folder is managed as an H5-first production pipeline for EXTRACT.
 4. Run EXTRACT
 5. Save output MAT (`output`, `config_used`, `meta`)
 
+## Direct `/mov` flow (no conversion)
+
+If masknmf exported EXTRACT-ready H5 directly (`/mov`), skip conversion:
+
+```matlab
+opts = struct();
+opts.input_h5 = 'E:\EXTRACT-cache\moco_extract_ready.h5';
+opts.input_h5_preoptimized = true;
+opts.dataset_name = '/mov'; % default
+R = run_1pMCRI_pipeline('', opts);
+```
+
 ## Quick start (H5 input)
 
 ```matlab
 opts = struct();
 opts.input_h5 = 'E:\EXTRACT-cache\moco_results_extract.h5';
 opts.python_exe = 'C:\Users\<user>\anaconda3\python.exe'; % optional
-opts.orientation_fix = 'none'; % 'none' | 'transpose_xy'
+opts.orientation_fix = 'transpose_xy'; % default, or 'none'
 R = run_1pMCRI_pipeline('', opts);
 ```
 
 Notes:
 - masknmf input dataset is fixed to `/motion_corrected`.
 - EXTRACT always reads `/mov` from the optimized H5.
-- If orientation looks transposed, set `opts.orientation_fix = 'transpose_xy'`.
+- Default is `opts.orientation_fix = 'transpose_xy'`. Set `'none'` if data already matches expected orientation.
+- With `opts.input_h5_preoptimized=true`, pipeline expects `/mov` directly and does not convert.
 
 ## Key H5 options
 
@@ -35,7 +48,8 @@ Notes:
 - `opts.h5_skip_if_exists` (default `true`)
 - `opts.h5_chunk_t/x/y` (default `256/256/256`)
 - `opts.h5_compression` (default `0`)
-- `opts.orientation_fix` (default `none`)
+- `opts.orientation_fix` (default `transpose_xy`)
+- `opts.input_h5_preoptimized` (default `false`)
 
 ## TIFF compatibility mode (optional)
 

@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--compression", type=int, default=0, help="Gzip compression level (0-9)")
     p.add_argument(
         "--orientation-fix",
-        default="none",
+        default="transpose_xy",
         choices=["none", "transpose_xy"],
         help="Apply orientation correction before writing output dataset.",
     )

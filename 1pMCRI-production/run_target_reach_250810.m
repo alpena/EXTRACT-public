@@ -4,20 +4,21 @@
 % Standard input is masknmf output H5 with dataset '/motion_corrected'.
 % run_1pMCRI_pipeline will convert it to optimized '/mov' H5 for EXTRACT.
 
-input_h5 = 'R:\code\masknmf-toolbox\demo_data\output\250810-Ras2-GC#78_moco_t_crop.h5';
+input_h5 = 'R:\code\masknmf-toolbox\demo_data\output\250810-Ras2-GC#78_moco_first500_smoke_direct.h5';
 % input_h5 = 'E:\EXTRACT-cache\moco_results_extract.h5';
 [~, src_name, ~] = fileparts(input_h5);
 
 opts = struct();
 opts.dataset_name = '/mov';
 opts.input_h5 = input_h5;
+opts.input_h5_preoptimized = true; % true: use input_h5:/mov directly (skip /motion_corrected -> /mov conversion)
 opts.python_exe = ''; % empty -> auto-detect (Conda/Anaconda preferred)
-opts.h5_skip_if_exists = true;  % skip conversion if optimized H5 already exists
+opts.h5_skip_if_exists = true;  % ignored when input_h5_preoptimized=true
 opts.h5_chunk_t = 256;
 opts.h5_chunk_x = 256;
 opts.h5_chunk_y = 256;
-opts.h5_compression = 0;
-opts.orientation_fix = 'transpose_xy'; % 'none' or 'transpose_xy'
+opts.h5_compression = 0;        % ignored when input_h5_preoptimized=true
+opts.orientation_fix = 'transpose_xy'; % ignored when input_h5_preoptimized=true
 opts.quick_n_frames = inf;
 opts.avg_cell_radius = 6;
 opts.gpu_id = 1;

@@ -6,6 +6,8 @@ function result = run_1pMCRI_pipeline(input_tiff, opts)
 % Usage:
 %   run_1pMCRI_pipeline('R:\path\movie.tif');
 %   run_1pMCRI_pipeline('', struct('input_h5', 'R:\path\moco.h5'));
+%   run_1pMCRI_pipeline('', struct('input_h5', 'R:\path\extract_ready.h5', ...
+%       'input_h5_preoptimized', true));
 
 if nargin < 1
     input_tiff = '';
@@ -51,7 +53,8 @@ h5_chunk_t = get_opt(opts, 'h5_chunk_t', 256);
 h5_chunk_x = get_opt(opts, 'h5_chunk_x', 256);
 h5_chunk_y = get_opt(opts, 'h5_chunk_y', 256);
 h5_compression = get_opt(opts, 'h5_compression', 0);
-orientation_fix = get_opt(opts, 'orientation_fix', 'none'); % 'none' | 'transpose_xy'
+orientation_fix = get_opt(opts, 'orientation_fix', 'transpose_xy'); % 'none' | 'transpose_xy'
+input_h5_preoptimized = get_opt(opts, 'input_h5_preoptimized', false);
 thresholds = get_opt(opts, 'thresholds', struct());
 num_partitions_x = get_opt(opts, 'num_partitions_x', []);
 num_partitions_y = get_opt(opts, 'num_partitions_y', []);
@@ -120,7 +123,28 @@ else
     % H5-first flow: read source H5 directly (do not copy input H5).
     fast_input_h5_path = input_h5;
     fprintf('Using source H5 directly (no copy): %s\n', fast_input_h5_path);
-    if isfile(h5_path) && h5_skip_if_exists && ~force_rebuild_h5
+    if input_h5_preoptimized
+        fprintf(['input_h5_preoptimized=true. Skipping H5 optimization and ', ...
+            'using %s:%s directly.\n'], fast_input_h5_path, dataset_name);
+        fprintf(['Ignoring optimization options: h5_skip_if_exists, h5_chunk_t/x/y, ', ...
+            'h5_compression, orientation_fix.\n']);
+        h5_path = fast_input_h5_path;
+        try
+            info_direct = h5info(h5_path, dataset_name);
+        catch ME
+            root_info = h5info(h5_path);
+            names = collect_h5_dataset_paths(root_info);
+            msg = sprintf(['input_h5_preoptimized=true requires dataset %s in %s\n', ...
+                'Available datasets:\n  %s'], ...
+                dataset_name, h5_path, strjoin(names, sprintf('\n  ')));
+            cause = MException('run_1pMCRI_pipeline:MissingPreoptimizedDataset', msg);
+            cause = addCause(cause, ME);
+            throw(cause);
+        end
+        if numel(info_direct.Dataspace.Size) ~= 3
+            error('Preoptimized input must be 3D at %s:%s', h5_path, dataset_name);
+        end
+    elseif isfile(h5_path) && h5_skip_if_exists && ~force_rebuild_h5
         fprintf('Optimized H5 already exists. Skipping conversion: %s\n', h5_path);
     else
         if isfile(h5_path)
@@ -228,6 +252,7 @@ config_used = output.config;
 meta = struct();
 meta.input_tiff = input_tiff;
 meta.input_h5 = input_h5;
+meta.input_h5_preoptimized = logical(input_h5_preoptimized);
 meta.fast_tiff_path = fast_tiff_path;
 meta.fast_input_h5_path = fast_input_h5_path;
 meta.h5_path = h5_path;

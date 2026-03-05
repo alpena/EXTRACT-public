@@ -1,6 +1,6 @@
 # Pipeline Requirements (H5-first)
 
-This document defines requirements for the standard 1pMCRI production path:
+This document defines requirements for the 1pMCRI H5 production paths:
 
 - Input: masknmf output H5 (`/motion_corrected`)
 - Convert: `1pMCRI-production/h5_to_h5_fast.py`
@@ -42,11 +42,18 @@ Use a local NVMe path for conversion and EXTRACT I/O:
 
 ## 4. Data format contract
 
+Standard converted flow:
 - Input H5 dataset name is fixed: `/motion_corrected`
 - Output optimized dataset name is fixed: `/mov`
-- EXTRACT always reads `/mov`
+- EXTRACT reads `/mov`
+
+Direct preoptimized flow:
+- Input H5 is already EXTRACT-ready and contains `/mov`
+- `opts.input_h5_preoptimized=true` is required to skip conversion
+
+Common constraints:
 - Input movie must be 3D
-- Pixel dtype is converted/stored as `uint16`
+- Pixel dtype is typically `uint16` (recommended)
 
 ## 5. Standard execution flow
 
@@ -54,6 +61,16 @@ Use a local NVMe path for conversion and EXTRACT I/O:
 2. Read input H5 from its original location
 3. Convert `/motion_corrected` -> optimized `/mov`
 4. Run EXTRACT from optimized H5
+5. Save MAT with `output`, `config_used`, `meta`
+
+## 5b. Direct preoptimized execution flow
+
+1. `run_1pMCRI_pipeline('', opts)` with:
+- `opts.input_h5 = <extract-ready.h5>`
+- `opts.input_h5_preoptimized = true`
+2. Pipeline validates `<input_h5>:/mov` as 3D
+3. Pipeline skips `/motion_corrected -> /mov` conversion
+4. EXTRACT runs directly from input H5
 5. Save MAT with `output`, `config_used`, `meta`
 
 ## 6. H5 options
@@ -64,9 +81,10 @@ Use a local NVMe path for conversion and EXTRACT I/O:
 - `opts.h5_chunk_x` (default `256`)
 - `opts.h5_chunk_y` (default `256`)
 - `opts.h5_compression` (default `0`)
-- `opts.orientation_fix` (default `none`)
+- `opts.orientation_fix` (default `transpose_xy`)
   - `none`
   - `transpose_xy`
+- `opts.input_h5_preoptimized` (default `false`)
 
 ## 7. Troubleshooting
 
@@ -74,8 +92,10 @@ Use a local NVMe path for conversion and EXTRACT I/O:
   - Set `opts.python_exe` explicitly.
 - `Input dataset not found: /motion_corrected`:
   - Check the masknmf H5 dataset name and path.
+- `input_h5_preoptimized=true` but `/mov` not found:
+  - Use conversion mode (`input_h5_preoptimized=false`) or export direct `/mov` from masknmf.
 - Orientation mismatch:
-  - Set `opts.orientation_fix = 'transpose_xy'`.
+  - Default is `transpose_xy`. If orientation is already correct, set `opts.orientation_fix = 'none'`.
 - Conversion speed is low:
   - Confirm both input/output are on fast drive.
   - Tune `h5_chunk_t/x/y`.
