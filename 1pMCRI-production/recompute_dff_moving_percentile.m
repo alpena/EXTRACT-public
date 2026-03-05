@@ -14,13 +14,15 @@ result_path = fullfile(fileparts(mfilename('fullpath')), ...
     'output_250810-Ras2-GC#78_reg_s_crop.mat');
 
 frame_rate_hz = 30;
-half_window_sec = 60;     % +-60 s window
-percentile_q = 8;         % baseline percentile
-baseline_mode = 'global_percentile';  % 'global_percentile'(default) | 'moving_percentile'
+half_window_sec = 90;     % +-60 s window
+percentile_q = 20;         % baseline percentile
+baseline_mode = 'moving_percentile';  % 'global_percentile'(default) | 'moving_percentile'
+moving_percentile_impl = 'decimated'; % 'exact' | 'decimated'
+moving_decimate_factor = 10;          % used when impl='decimated'
 save_output = true;
 plot_n_cells = 5;
 rng_seed = 1;
-fallback_use_parfor = true;
+moving_percentile_use_parfor = true;
 
 % Ensure ndSparse class can be resolved during MAT load.
 script_dir = fileparts(mfilename('fullpath'));
@@ -79,16 +81,24 @@ switch baseline_mode
         if mod(win, 2) == 0
             win = win + 1;
         end
+        impl = lower(strtrim(char(moving_percentile_impl)));
         fprintf(['Computing moving percentile baseline: q=%g, fs=%.3f Hz, ', ...
-            'window=%d frames (~%.1f sec)\n'], percentile_q, frame_rate_hz, win, win / frame_rate_hz);
-
-        if exist('movprctile', 'file') == 2
-            F0_t = movprctile(F_est, percentile_q, win, 2, 'Endpoints', 'shrink');
-        else
-            warning(['movprctile not available. Using exact compatibility fallback ', ...
-                '(prctile with Endpoints=''shrink''). This can be slow.']);
-            F0_t = movprctile_compat_exact(F_est, percentile_q, win, fallback_use_parfor);
+            'window=%d frames (~%.1f sec), impl=%s\n'], ...
+            percentile_q, frame_rate_hz, win, win / frame_rate_hz, impl);
+        t_mp = tic;
+        switch impl
+            case 'exact'
+                F0_t = moving_percentile_exact(F_est, percentile_q, win, moving_percentile_use_parfor);
+            case 'decimated'
+                [F0_t, decim_info] = moving_percentile_decimated( ...
+                    F_est, percentile_q, win, moving_decimate_factor, moving_percentile_use_parfor);
+                fprintf(['Decimated moving percentile: factor=%d, frames_ds=%d, ', ...
+                    'window_ds=%d\n'], decim_info.decimate_factor, ...
+                    decim_info.n_frames_ds, decim_info.window_ds);
+            otherwise
+                error('Unsupported moving_percentile_impl: %s', impl);
         end
+        fprintf('Moving percentile finished in %.2f sec\n', toc(t_mp));
     otherwise
         error('Unsupported baseline_mode: %s', baseline_mode);
 end
@@ -160,6 +170,8 @@ if save_output
     meta.percentile_q = percentile_q;
     meta.window_frames = win;
     meta.baseline_mode = char(baseline_mode);
+    meta.moving_percentile_impl = char(moving_percentile_impl);
+    meta.moving_decimate_factor = moving_decimate_factor;
     meta.timestamp = char(datetime('now', 'Format', 'yyyy-MM-dd''T''HH:mm:ss'));
     save(out_mat, 'dff', 'F_est', 'F0_t', 'F0_cell', 'ids', 'meta', '-v7.3');
     fprintf('Saved dF/F mat: %s\n', out_mat);
@@ -206,9 +218,53 @@ den = full(sum(S2p, 1));                 % [1 x n_cells]
 F0_cell = single((num ./ max(den, eps))');
 end
 
-function Y = movprctile_compat_exact(X, q, win, use_parfor)
-% Exact compatibility fallback for:
-%   movprctile(X, q, win, 2, 'Endpoints', 'shrink')
+function F0_t = moving_percentile_exact(F_est, q, win, use_parfor)
+% Primary path: always use in-script exact implementation.
+F0_t = moving_percentile_exact_compat(F_est, q, win, use_parfor);
+end
+
+function [F0_t, info] = moving_percentile_decimated(F_est, q, win, decimate_factor, use_parfor)
+% Fast approximation:
+% 1) decimate in time
+% 2) compute moving percentile on decimated timeline
+% 3) upsample by repelem (stair-step baseline)
+if decimate_factor < 1
+    decimate_factor = 1;
+end
+
+[n_cells, n_frames] = size(F_est);
+if decimate_factor == 1
+    F0_t = moving_percentile_exact(F_est, q, win, use_parfor);
+    info = struct('decimate_factor', 1, 'n_frames_ds', n_frames, 'window_ds', win);
+    return;
+end
+
+idx_ds = 1:decimate_factor:n_frames;
+F_est_ds = F_est(:, idx_ds);
+win_ds = max(5, round(win / decimate_factor));
+if mod(win_ds, 2) == 0
+    win_ds = win_ds + 1;
+end
+
+F0_ds = moving_percentile_exact(F_est_ds, q, win_ds, use_parfor);
+F0_t = repelem(single(F0_ds), 1, decimate_factor);
+if size(F0_t, 2) < n_frames
+    pad_cols = n_frames - size(F0_t, 2);
+    F0_t = [F0_t, repmat(F0_t(:, end), 1, pad_cols)];
+elseif size(F0_t, 2) > n_frames
+    F0_t = F0_t(:, 1:n_frames);
+end
+
+if ~isequal(size(F0_t), [n_cells, n_frames])
+    error('Decimated baseline size mismatch.');
+end
+
+info = struct('decimate_factor', decimate_factor, ...
+    'n_frames_ds', numel(idx_ds), 'window_ds', win_ds);
+end
+
+function Y = moving_percentile_exact_compat(X, q, win, use_parfor)
+% Exact moving-percentile implementation with shrink endpoints.
 % X: [cells x frames]
 % q: percentile (0..100)
 % win: odd/even supported
@@ -258,9 +314,9 @@ for c = 1:n_chunks
 
     Y(c_begin:c_end, :) = Yi;
     if run_parallel
-        fprintf('Fallback movprctile(parfor): cell-chunk %d/%d done\n', c, n_chunks);
+        fprintf('Moving percentile(parfor): cell-chunk %d/%d done\n', c, n_chunks);
     else
-        fprintf('Fallback movprctile(serial): cell-chunk %d/%d done\n', c, n_chunks);
+        fprintf('Moving percentile(serial): cell-chunk %d/%d done\n', c, n_chunks);
     end
 end
 end
