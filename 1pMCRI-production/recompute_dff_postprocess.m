@@ -8,7 +8,7 @@ function result = recompute_dff_postprocess(result_path, opts)
 %       half_window_sec            (default 60)
 %       percentile_q               (default 8)
 %       baseline_mode              (default 'moving_percentile')
-%                                   'moving_percentile' | 'global_percentile'
+%                                   'moving_percentile' | 'global_percentile' | 'extract_temporal'
 %       moving_percentile_impl     (default 'decimated')
 %                                   'exact' | 'decimated'
 %       moving_decimate_factor     (default 10)
@@ -88,6 +88,11 @@ F_est = bsxfun(@plus, T, F0_cell);   % [cells x frames]
 
 win = NaN;
 switch baseline_mode
+    case 'extract_temporal'
+        fprintf('Using EXTRACT temporal_weights directly as dff (no recomputation).\n');
+        dff = single(T);
+        F_est = [];
+        F0_t = [];
     case 'global_percentile'
         fprintf('Computing global percentile baseline: q=%g over full trace\n', percentile_q);
         F0_const = single(prctile(F_est, percentile_q, 2));
@@ -118,7 +123,9 @@ switch baseline_mode
         error('Unsupported baseline_mode: %s', baseline_mode);
 end
 
-dff = (F_est - F0_t) ./ max(F0_t, eps('single'));
+if ~strcmp(baseline_mode, 'extract_temporal')
+    dff = (F_est - F0_t) ./ max(F0_t, eps('single'));
+end
 bad_ratio = mean(~isfinite(dff(:)));
 if bad_ratio > nan_inf_fail_ratio
     error('dff contains too many non-finite values: ratio=%.6f > %.6f', bad_ratio, nan_inf_fail_ratio);
@@ -134,6 +141,8 @@ switch baseline_mode
         suffix = 'mp';
     case 'global_percentile'
         suffix = 'gp';
+    case 'extract_temporal'
+        suffix = 'tw';
     otherwise
         suffix = 'dff';
 end
@@ -150,35 +159,52 @@ if plot_n_cells > 0 || save_figure
         ids = 1:min(5, n_cells);
     end
     f = figure('Color', 'w', 'Position', [60 60 1800 1100], 'Visible', 'off');
-    tlo = tiledlayout(numel(ids), 2, 'TileSpacing', 'compact', 'Padding', 'compact');
+    ncols = 2;
+    if strcmp(baseline_mode, 'extract_temporal')
+        ncols = 1;
+    end
+    tlo = tiledlayout(numel(ids), ncols, 'TileSpacing', 'compact', 'Padding', 'compact');
     if strcmp(baseline_mode, 'moving_percentile')
         title(tlo, sprintf('Post-hoc dF/F | mode=moving q=%g, +-%.0f sec', ...
             percentile_q, half_window_sec));
+    elseif strcmp(baseline_mode, 'extract_temporal')
+        title(tlo, 'Post-hoc dF/F | mode=extract_temporal (raw temporal weights)');
     else
         title(tlo, sprintf('Post-hoc dF/F | mode=global q=%g', percentile_q));
     end
     for r = 1:numel(ids)
         cid = ids(r);
-        nexttile((r - 1) * 2 + 1);
-        hold on;
-        plot(F_est(cid, :), 'Color', [0.35 0.35 0.35], 'LineWidth', 0.8);
-        plot(F0_t(cid, :), 'Color', [0.85 0.2 0.2], 'LineWidth', 1.0);
-        hold off;
-        grid on;
-        xlabel('Frame');
-        ylabel('a.u.');
-        title(sprintf('Cell %d: F_{est} and F0', cid));
-
-        nexttile((r - 1) * 2 + 2);
+        if ~strcmp(baseline_mode, 'extract_temporal')
+            nexttile((r - 1) * 2 + 1);
+            hold on;
+            plot(F_est(cid, :), 'Color', [0.35 0.35 0.35], 'LineWidth', 0.8);
+            plot(F0_t(cid, :), 'Color', [0.85 0.2 0.2], 'LineWidth', 1.0);
+            hold off;
+            grid on;
+            xlabel('Frame');
+            ylabel('a.u.');
+            title(sprintf('Cell %d: F_{est} and F0', cid));
+            tile_idx = (r - 1) * 2 + 2;
+        else
+            tile_idx = r;
+        end
+        nexttile(tile_idx);
         plot(dff(cid, :), 'Color', [0.1 0.45 0.9], 'LineWidth', 0.8);
         grid on;
         xlabel('Frame');
-        ylabel('\DeltaF/F');
-        title(sprintf('Cell %d: dF/F', cid));
+        if strcmp(baseline_mode, 'extract_temporal')
+            ylabel('a.u.');
+            title(sprintf('Cell %d: temporal\\_weights', cid));
+        else
+            ylabel('\DeltaF/F');
+            title(sprintf('Cell %d: dF/F', cid));
+        end
     end
 
     if strcmp(baseline_mode, 'moving_percentile')
         default_fig_png = fullfile(fileparts(result_path), 'recomputed_dff_moving_percentile.png');
+    elseif strcmp(baseline_mode, 'extract_temporal')
+        default_fig_png = fullfile(fileparts(result_path), 'recomputed_dff_extract_temporal.png');
     else
         default_fig_png = fullfile(fileparts(result_path), 'recomputed_dff_global_percentile.png');
     end
@@ -197,6 +223,7 @@ meta.half_window_sec = half_window_sec;
 meta.percentile_q = percentile_q;
 meta.window_frames = win;
 meta.baseline_mode = baseline_mode;
+meta.use_extract_temporal_direct = strcmp(baseline_mode, 'extract_temporal');
 meta.moving_percentile_impl = moving_percentile_impl;
 meta.moving_decimate_factor = moving_decimate_factor;
 meta.nan_inf_fail_ratio = nan_inf_fail_ratio;
