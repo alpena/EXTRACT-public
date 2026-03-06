@@ -19,7 +19,7 @@ repo_root = fileparts(script_dir);
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 addpath(genpath(fullfile(repo_root, 'External algorithms')));
 
-run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810';
+run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/target_reach_250810-Ras2-GC#78';
 roi_thresh_frac = 0.20;
 bg_radius_px = 30;
 bg_radius_step_px = 10;
@@ -41,6 +41,7 @@ movie_dataset = '/mov';
 
 fprintf('EXTRACT MAT: %s\n', extract_mat);
 fprintf('Movie H5   : %s (%s)\n', movie_h5, movie_dataset);
+fprintf('Chunk frames: %d\n', chunk_frames);
 
 L = load(extract_mat, 'output');
 if ~isfield(L, 'output')
@@ -53,14 +54,7 @@ if ~isfield(output, 'spatial_weights') || ~isfield(output, 'temporal_weights')
 end
 
 S = output.spatial_weights;
-if isa(S, 'ndSparse')
-    S = full(S);
-end
-S = single(S);
-if ndims(S) ~= 3
-    error('spatial_weights must be 3D.');
-end
-[h, w, n_cells] = size(S);
+[S2, h, w, n_cells] = spatial_to_sparse2d(S);
 
 T = as_cells_by_time(output.temporal_weights, n_cells);
 [n_cells_t, n_frames_t] = size(T);
@@ -87,31 +81,46 @@ fprintf('Cells: %d\n', n_cells);
 fprintf('H5 dims inferred: size=%s, time_dim=%d, h_dim=%d, w_dim=%d\n', ...
     mat2str(mov_size), time_dim, dim_h, dim_w);
 
-% Build ROI masks and centroids
-[Yg, Xg] = ndgrid(single(1:h), single(1:w));
+% Build ROI masks and centroids directly from sparse columns
+fprintf('Phase 1/5: build ROI masks and centroids\n');
 roi_masks = cell(n_cells, 1);
 cx = nan(n_cells, 1, 'single');
 cy = nan(n_cells, 1, 'single');
 
 for k = 1:n_cells
-    wk = S(:, :, k);
-    wk(wk < 0) = 0;
-    mmax = max(wk(:));
+    if mod(k, 1000) == 0 || k == n_cells
+        fprintf('  ROI masks/centroids: %d / %d (%.1f%%)\n', k, n_cells, 100 * k / max(n_cells, 1));
+    end
+    [pix_idx, ~, ww] = find(S2(:, k));
+    if isempty(pix_idx)
+        continue;
+    end
+    keep_pos = ww > 0;
+    if ~any(keep_pos)
+        continue;
+    end
+    pix_idx = pix_idx(keep_pos);
+    ww = single(ww(keep_pos));
+
+    mmax = max(ww);
     if mmax <= 0
         continue;
     end
-    mk = wk >= (roi_thresh_frac * mmax);
-    if ~any(mk(:))
+    keep_roi = ww >= (roi_thresh_frac * mmax);
+    if ~any(keep_roi)
         continue;
     end
-    roi_masks{k} = find(mk);
-    ww = wk(mk);
+    pix_idx = pix_idx(keep_roi);
+    ww = ww(keep_roi);
+    roi_masks{k} = pix_idx;
+
     s = sum(ww);
     if s <= 0
         continue;
     end
-    xx = Xg(mk);
-    yy = Yg(mk);
+    [yy, xx] = ind2sub([h, w], pix_idx);
+    xx = single(xx);
+    yy = single(yy);
     cx(k) = sum(xx .* ww) / s;
     cy(k) = sum(yy .* ww) / s;
 end
@@ -124,6 +133,7 @@ end
 fprintf('Valid ROI count: %d\n', n_roi);
 
 % Build all-cell union mask (for background exclusion)
+fprintf('Phase 2/5: build all-cell union mask\n');
 all_cell_union = false(h, w);
 for i = 1:n_roi
     all_cell_union(roi_masks{roi_id(i)}) = true;
@@ -131,12 +141,16 @@ end
 all_cell_union_lin = all_cell_union(:);
 
 % Build local background masks with radius expansion
+fprintf('Phase 3/5: build local background masks\n');
 bg_masks = cell(n_roi, 1);
 bg_pixel_count = zeros(n_roi, 1);
 bg_radius_used = zeros(n_roi, 1);
 invalid_bg = false(n_roi, 1);
 
 for i = 1:n_roi
+    if mod(i, 1000) == 0 || i == n_roi
+        fprintf('  Local BG masks: %d / %d (%.1f%%)\n', i, n_roi, 100 * i / max(n_roi, 1));
+    end
     rid = roi_id(i);
     found = false;
     for rad = bg_radius_px:bg_radius_step_px:bg_radius_max_px
@@ -160,24 +174,26 @@ end
 fprintf('Invalid BG ROI count: %d / %d\n', nnz(invalid_bg), n_roi);
 
 % Build sparse selectors for fast mean extraction
-[ii_roi, jj_roi] = build_sparse_indices(roi_masks, roi_id);
-A_roi = sparse(ii_roi, jj_roi, 1, h * w, n_roi);
+fprintf('Phase 4/5: build sparse selectors\n');
+A_roi = build_sparse_selector(roi_masks, roi_id, h * w, n_roi);
 cnt_roi = full(sum(A_roi, 1))';
+fprintf('  ROI selector nnz: %d\n', nnz(A_roi));
 
-[ii_bg, jj_bg] = build_sparse_indices(bg_masks, []);
-A_bg = sparse(ii_bg, jj_bg, 1, h * w, n_roi);
+A_bg = build_sparse_selector(bg_masks, [], h * w, n_roi);
 cnt_bg = full(sum(A_bg, 1))';
+fprintf('  BG selector nnz : %d\n', nnz(A_bg));
 
 trace_raw_roi = zeros(n_roi, n_frames, 'single');
 trace_raw_bg = nan(n_roi, n_frames, 'single');
-trace_raw_minus_bg = nan(n_roi, n_frames, 'single');
 
+fprintf('Phase 5/5: read movie chunks and compute traces\n');
 n_chunks = ceil(n_frames / chunk_frames);
 for c = 1:n_chunks
     f_begin = (c - 1) * chunk_frames + 1;
     f_end = min(c * chunk_frames, n_frames);
     n_this = f_end - f_begin + 1;
-    fprintf('Reading H5 chunk %d/%d (frames %d-%d)\n', c, n_chunks, f_begin, f_end);
+    fprintf('  Chunk %d/%d (frames %d-%d, %.1f%%)\n', ...
+        c, n_chunks, f_begin, f_end, 100 * c / max(n_chunks, 1));
 
     start = ones(1, 3);
     count = mov_size;
@@ -197,6 +213,7 @@ for c = 1:n_chunks
         bg_block = single(bsxfun(@rdivide, sum_bg, cnt_bg(valid_bg)));
         trace_raw_bg(valid_bg, f_begin:f_end) = bg_block;
     end
+    fprintf('    completed chunk %d/%d\n', c, n_chunks);
 end
 
 trace_raw_minus_bg = trace_raw_roi - trace_raw_bg;
@@ -215,6 +232,7 @@ source_extract_mat = extract_mat;
 source_movie_h5 = movie_h5;
 
 out_mat = fullfile(run_dir, 'qc_raw_roi_localbg_excluding_cells_allrois.mat');
+fprintf('Saving output MAT: %s\n', out_mat);
 save(out_mat, ...
     'trace_raw_roi', 'trace_raw_bg', 'trace_raw_minus_bg', 'trace_temporal_weights', ...
     'roi_id', 'bg_pixel_count', 'bg_radius_used', 'invalid_bg', ...
@@ -246,6 +264,29 @@ else
 end
 end
 
+function [S2, h, w, n_cells] = spatial_to_sparse2d(S)
+if isa(S, 'ndSparse')
+    sz = size(S);
+    if numel(sz) ~= 3
+        error('ndSparse spatial_weights must be 3D-like. Got size=%s', mat2str(sz));
+    end
+    h = sz(1);
+    w = sz(2);
+    n_cells = sz(3);
+    S2 = sparse2d(S); % [h*w x n_cells]
+    if ~issparse(S2)
+        S2 = sparse(S2);
+    end
+else
+    S = single(S);
+    if ndims(S) ~= 3
+        error('spatial_weights must be 3D or ndSparse.');
+    end
+    [h, w, n_cells] = size(S);
+    S2 = sparse(reshape(S, h * w, n_cells));
+end
+end
+
 function idx = local_bg_indices(cx, cy, rad, h, w, all_cell_union_lin)
 xmin = max(1, floor(double(cx) - rad));
 xmax = min(w, ceil(double(cx) + rad));
@@ -262,34 +303,45 @@ idx = sub2ind([h w], Yb(keep), Xb(keep));
 idx = idx(~all_cell_union_lin(idx));
 end
 
-function [ii, jj] = build_sparse_indices(mask_cell, roi_ids)
+function A = build_sparse_selector(mask_cell, roi_ids, n_rows, n_cols)
 if isempty(roi_ids)
-    n = numel(mask_cell);
+    src_ids = (1:n_cols)';
 else
-    n = numel(roi_ids);
+    src_ids = roi_ids(:);
+    if numel(src_ids) ~= n_cols
+        error('ROI id count mismatch: expected %d, got %d', n_cols, numel(src_ids));
+    end
 end
 
-ii = [];
-jj = [];
-for col = 1:n
-    if isempty(roi_ids)
-        idx = mask_cell{col};
-    else
-        idx = mask_cell{roi_ids(col)};
-    end
-    if isempty(idx)
+counts = zeros(n_cols, 1);
+for col = 1:n_cols
+    counts(col) = numel(mask_cell{src_ids(col)});
+end
+
+n_total = sum(counts);
+ii = zeros(n_total, 1);
+jj = zeros(n_total, 1);
+write_pos = 1;
+for col = 1:n_cols
+    idx = mask_cell{src_ids(col)};
+    n_this = numel(idx);
+    if n_this == 0
         continue;
     end
-    ii = [ii; idx(:)]; %#ok<AGROW>
-    jj = [jj; col * ones(numel(idx), 1)]; %#ok<AGROW>
+    span = write_pos:(write_pos + n_this - 1);
+    ii(span) = idx(:);
+    jj(span) = col;
+    write_pos = write_pos + n_this;
 end
+
+if write_pos <= n_total
+    ii(write_pos:end) = [];
+    jj(write_pos:end) = [];
+end
+A = sparse(ii, jj, 1, n_rows, n_cols);
 end
 
 function [time_dim, dim_h, dim_w] = infer_movie_dims(mov_size, h, w)
-time_dim = 0;
-dim_h = 0;
-dim_w = 0;
-
 for td = 1:3
     sd = setdiff(1:3, td, 'stable');
     a = mov_size(sd(1));
