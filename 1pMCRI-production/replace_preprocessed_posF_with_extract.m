@@ -1,32 +1,75 @@
-%% Replace preprocessed_data.mat pos/F with EXTRACT + CASCADE output
-% - pos: ROI centroids in [x y] pixel coordinates (cells x 2)
-% - F:   CASCADE spike_prob as (cells x frames)
-% - Optional: reapply coordinate transform saved in import_opt
-%   pos_mm = (pos_pix * pix_to_dist - center_pos) rotated by angle_deg.
+function result = replace_preprocessed_posF_with_extract(varargin)
+% replace_preprocessed_posF_with_extract
+% Replace preprocessed_data.mat pos/F using current pipeline artifacts.
+%
+% Inputs are resolved from a pipeline run_dir:
+%   - EXTRACT: run_dir/artifacts/output_*_moco_direct.mat
+%   - CASCADE: run_dir/artifacts/cascade_prediction_*.mat
+%
+% Name-value options:
+%   run_dir           : pipeline output directory
+%                       (default: demo_data/output/smoke_250810)
+%   preprocessed_mat  : target preprocessed_data.mat to update (required)
+%   extract_mat       : optional explicit EXTRACT MAT override
+%   cascade_mat       : optional explicit CASCADE MAT override
+%   write_mode        : 'matfile' (default) | 'append'
+%
+% Replaced variables:
+%   pos : ROI centroids transformed using import_opt if present
+%   F   : CASCADE spike_prob, stored as [cells x frames]
 
-clearvars;
+opts = struct();
+opts.run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810';
+opts.preprocessed_mat = '';
+opts.extract_mat = '';
+opts.cascade_mat = '';
+opts.write_mode = 'matfile';
+opts = parse_name_values(opts, varargin);
 
-script_dir = fileparts(mfilename('fullpath'));
-repo_root = fileparts(script_dir);
-addpath(genpath(fullfile(repo_root, 'EXTRACT')));
+run_dir = char(opts.run_dir);
+preprocessed_mat = char(opts.preprocessed_mat);
+extract_mat = char(opts.extract_mat);
+cascade_mat = char(opts.cascade_mat);
+write_mode = lower(strtrim(char(opts.write_mode)));
 
-preprocessed_mat = fullfile(script_dir, 'preprocessed_data.mat');
-extract_output_mat = fullfile(script_dir, 'output_250810-Ras2-GC#78_reg.mat');
-cascade_mat = fullfile('R:\', 'code', 'Cascade', 'Example_datasets', ...
-    '1pMCRI_demo_outputs', 'cascade_prediction_1pMCRI_temporal_weights_allcells.mat');
-write_mode = 'matfile'; % 'matfile' (fast, recommended) | 'append'
-
+if isempty(preprocessed_mat)
+    error('preprocessed_mat is required.');
+end
+if ~isfolder(run_dir)
+    error('run_dir not found: %s', run_dir);
+end
 if ~isfile(preprocessed_mat)
     error('preprocessed_data.mat not found: %s', preprocessed_mat);
 end
-if ~isfile(extract_output_mat)
-    error('EXTRACT output mat not found: %s', extract_output_mat);
+
+artifact_dir = fullfile(run_dir, 'artifacts');
+if ~isfolder(artifact_dir)
+    error('artifacts dir not found: %s', artifact_dir);
+end
+
+if isempty(extract_mat)
+    extract_mat = find_single_file(artifact_dir, 'output_*_moco_direct.mat');
+end
+if isempty(cascade_mat)
+    cascade_mat = find_single_file(artifact_dir, 'cascade_prediction_*.mat');
+end
+if ~isfile(extract_mat)
+    error('EXTRACT output mat not found: %s', extract_mat);
 end
 if ~isfile(cascade_mat)
     error('CASCADE mat not found: %s', cascade_mat);
 end
 
-% Load import options (if available) from existing preprocessed_data.mat
+script_dir = fileparts(mfilename('fullpath'));
+repo_root = fileparts(script_dir);
+addpath(genpath(fullfile(repo_root, 'EXTRACT')));
+
+fprintf('run_dir          : %s\n', run_dir);
+fprintf('preprocessed_mat : %s\n', preprocessed_mat);
+fprintf('extract_mat      : %s\n', extract_mat);
+fprintf('cascade_mat      : %s\n', cascade_mat);
+fprintf('write_mode       : %s\n', write_mode);
+
 import_opt = struct();
 if ~isempty(whos('-file', preprocessed_mat, 'import_opt'))
     T0 = load(preprocessed_mat, 'import_opt');
@@ -35,25 +78,24 @@ if ~isempty(whos('-file', preprocessed_mat, 'import_opt'))
     end
 end
 
-E = load(extract_output_mat, 'output');
-if ~isfield(E, 'output') || ~isfield(E.output, 'spatial_weights') || ~isfield(E.output, 'temporal_weights')
-    error('Invalid EXTRACT output format in %s', extract_output_mat);
+E = load(extract_mat, 'output');
+if ~isfield(E, 'output') || ~isfield(E.output, 'spatial_weights')
+    error('Invalid EXTRACT output format in %s', extract_mat);
 end
 
 S = E.output.spatial_weights;
-
-% Build centroid positions from spatial weights
 if isa(S, 'ndSparse')
     [h, w, n_cells] = size(S);
-    S2 = sparse2d(S); % [h*w x n_cells]
+    S2 = sparse2d(S);
 else
     S = single(S);
+    if ndims(S) ~= 3
+        error('spatial_weights must be 3D or ndSparse.');
+    end
     [h, w, n_cells] = size(S);
-    S2 = reshape(S, h * w, n_cells);
-    S2 = max(S2, 0);
+    S2 = sparse(reshape(S, h * w, n_cells));
 end
 
-% Load CASCADE spike_prob and convert to cells x frames.
 C = load(cascade_mat, 'spike_prob');
 if ~isfield(C, 'spike_prob') || isempty(C.spike_prob)
     error('spike_prob not found in CASCADE mat: %s', cascade_mat);
@@ -67,42 +109,24 @@ else
     error(['Cell count mismatch: EXTRACT spatial cells=%d, ', ...
         'CASCADE spike_prob size=[%d %d]'], n_cells, size(spk, 1), size(spk, 2));
 end
-F = single(F);
-
-if size(F, 1) ~= n_cells
-    error('Cell count mismatch: spatial=%d, temporal(F rows)=%d', n_cells, size(F, 1));
-end
 
 [Yg, Xg] = ndgrid(single(1:h), single(1:w));
 Xv = double(Xg(:));
 Yv = double(Yg(:));
-
-if issparse(S2)
-    S2 = max(S2, 0);
-    denom = full(sum(S2, 1));
-    sx = Xv' * S2;
-    sy = Yv' * S2;
-else
-    S2 = double(max(S2, 0));
-    denom = sum(S2, 1);
-    sx = Xv' * S2;
-    sy = Yv' * S2;
-end
-
+S2 = max(S2, 0);
+denom = full(sum(S2, 1));
+sx = Xv' * S2;
+sy = Yv' * S2;
 denom = max(denom, eps);
-pos_pix = [sx(:) ./ denom(:), sy(:) ./ denom(:)]; % [x y] in pixels
+pos_pix = [sx(:) ./ denom(:), sy(:) ./ denom(:)];
 
-% DeepWonder-style axis convention equivalent to:
-% [centroid(2), -centroid(1)]  -> [x, -y]
+% Match existing downstream convention.
 pos_pix(:, 2) = -pos_pix(:, 2);
 
-% Reproduce original coordinate transform if import_opt values exist.
 [pos, transform_meta] = apply_import_opt_transform(pos_pix, import_opt);
 
-% Replace variables in preprocessed_data.mat
-switch lower(write_mode)
+switch write_mode
     case 'matfile'
-        % Faster than save -append for large MAT files.
         m = matfile(preprocessed_mat, 'Writable', true);
         m.pos = pos;
         m.F = F;
@@ -112,21 +136,34 @@ switch lower(write_mode)
         error('Unknown write_mode: %s', write_mode);
 end
 
+result = struct();
+result.run_dir = run_dir;
+result.preprocessed_mat = preprocessed_mat;
+result.extract_mat = extract_mat;
+result.cascade_mat = cascade_mat;
+result.pos_size = size(pos);
+result.F_size = size(F);
+result.transform_meta = transform_meta;
+
 fprintf('Updated: %s\n', preprocessed_mat);
 fprintf('  pos size = [%d %d]\n', size(pos, 1), size(pos, 2));
 fprintf('  F   size = [%d %d]\n', size(F, 1), size(F, 2));
-fprintf('  write mode = %s\n', write_mode);
-fprintf('  F source = %s (spike_prob)\n', cascade_mat);
-fprintf('  transform: pix_to_dist=%g, center_pos=[%g %g], angle_deg=%g\n', ...
-    transform_meta.pix_to_dist, transform_meta.center_pos(1), ...
-    transform_meta.center_pos(2), transform_meta.angle_deg);
+
+end
+
+function p = find_single_file(dir_path, pattern)
+cands = dir(fullfile(dir_path, pattern));
+if isempty(cands)
+    error('No file matched: %s/%s', dir_path, pattern);
+end
+if numel(cands) > 1
+    names = strjoin({cands.name}, ', ');
+    error('Multiple files matched (%s): %s', pattern, names);
+end
+p = fullfile(cands(1).folder, cands(1).name);
+end
 
 function [pos_out, meta] = apply_import_opt_transform(pos_pix, import_opt)
-% Reproduce:
-% pos = pos * pix_to_dist;
-% pos(:,i) = pos(:,i) - center_pos(i);
-% pos = (R * pos')', where R from angle_deg.
-
 meta.pix_to_dist = 1;
 meta.center_pos = [0 0];
 meta.angle_deg = 0;
@@ -151,4 +188,21 @@ pos(:, 2) = pos(:, 2) - meta.center_pos(2);
 theta = deg2rad(meta.angle_deg);
 R = [cos(theta), -sin(theta); sin(theta), cos(theta)];
 pos_out = (R * pos')';
+end
+
+function opts = parse_name_values(opts, args)
+if isempty(args)
+    return;
+end
+if mod(numel(args), 2) ~= 0
+    error('Name-value arguments must be paired.');
+end
+for i = 1:2:numel(args)
+    key = char(args{i});
+    val = args{i + 1};
+    if ~isfield(opts, key)
+        error('Unknown option: %s', key);
+    end
+    opts.(key) = val;
+end
 end
