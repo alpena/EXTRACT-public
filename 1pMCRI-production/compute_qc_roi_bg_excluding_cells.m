@@ -1,30 +1,66 @@
-%% Compute QC traces: ROI raw and local background raw (excluding all cell masks)
-% This script computes, for all valid ROIs:
-% 1) Raw intensity from the same spatial ROI
-% 2) Local background raw intensity from surrounding area (~30 px),
-%    excluding all detected cell masks
-% 3) ROI-BG raw trace
+function result = compute_qc_roi_bg_excluding_cells(varargin)
+% compute_qc_roi_bg_excluding_cells
+% Compute QC traces for all valid ROIs:
+% 1) Raw ROI intensity
+% 2) Local background raw intensity from surrounding pixels, excluding all cells
+% 3) ROI minus local background
 %
-% Input source (default):
+% Default input source:
 %   run_dir/artifacts/output_*_moco_direct.mat
-%   run_dir/artifacts/*_moco_direct.h5 (dataset: /mov, shape: t x x x y)
+%   run_dir/artifacts/*_moco_direct.h5 (dataset: /mov, shape inferred)
 %
-% Output:
+% Name-value options:
+%   run_dir             : pipeline output directory
+%                         (default: demo_data/output/smoke_250810)
+%   extract_mat         : optional explicit EXTRACT MAT override
+%   movie_h5            : optional explicit movie H5 override
+%   movie_dataset       : H5 dataset name (default: /mov)
+%   out_mat             : optional explicit output path override
+%   roi_thresh_frac     : ROI threshold as a fraction of max weight (default: 0.20)
+%   bg_radius_px        : initial local background radius in pixels (default: 30)
+%   bg_radius_step_px   : radius expansion step in pixels (default: 10)
+%   bg_radius_max_px    : maximum local background radius in pixels (default: 80)
+%   chunk_frames        : H5 read chunk size in frames (default: 2000)
+%
+% Output MAT:
 %   run_dir/qc_raw_roi_localbg_excluding_cells_allrois.mat
+%
+% Return struct fields:
+%   out_mat
+%   n_roi
+%   n_frames
+%   invalid_bg_count
+%   source_extract_mat
+%   source_movie_h5
 
-clearvars;
+opts = struct();
+opts.run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810';
+opts.extract_mat = '';
+opts.movie_h5 = '';
+opts.movie_dataset = '/mov';
+opts.out_mat = '';
+opts.roi_thresh_frac = 0.20;
+opts.bg_radius_px = 30;
+opts.bg_radius_step_px = 10;
+opts.bg_radius_max_px = 80;
+opts.chunk_frames = 2000;
+opts = parse_name_values(opts, varargin);
 
 script_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(script_dir);
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 addpath(genpath(fullfile(repo_root, 'External algorithms')));
 
-run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810';
-roi_thresh_frac = 0.20;
-bg_radius_px = 30;
-bg_radius_step_px = 10;
-bg_radius_max_px = 80;
-chunk_frames = 2000;
+run_dir = char(opts.run_dir);
+extract_mat = char(opts.extract_mat);
+movie_h5 = char(opts.movie_h5);
+movie_dataset = char(opts.movie_dataset);
+out_mat = char(opts.out_mat);
+roi_thresh_frac = opts.roi_thresh_frac;
+bg_radius_px = opts.bg_radius_px;
+bg_radius_step_px = opts.bg_radius_step_px;
+bg_radius_max_px = opts.bg_radius_max_px;
+chunk_frames = opts.chunk_frames;
 
 if ~isfolder(run_dir)
     error('run_dir not found: %s', run_dir);
@@ -35,9 +71,12 @@ if ~isfolder(artifact_dir)
     error('artifacts directory not found: %s', artifact_dir);
 end
 
-extract_mat = find_single_file(artifact_dir, 'output_*_moco_direct.mat');
-movie_h5 = find_single_file(artifact_dir, '*_moco_direct.h5');
-movie_dataset = '/mov';
+if isempty(extract_mat)
+    extract_mat = find_single_file(artifact_dir, 'output_*_moco_direct.mat');
+end
+if isempty(movie_h5)
+    movie_h5 = find_single_file(artifact_dir, '*_moco_direct.h5');
+end
 
 fprintf('EXTRACT MAT: %s\n', extract_mat);
 fprintf('Movie H5   : %s (%s)\n', movie_h5, movie_dataset);
@@ -231,7 +270,9 @@ source_run_dir = run_dir;
 source_extract_mat = extract_mat;
 source_movie_h5 = movie_h5;
 
-out_mat = fullfile(run_dir, 'qc_raw_roi_localbg_excluding_cells_allrois.mat');
+if isempty(out_mat)
+    out_mat = fullfile(run_dir, 'qc_raw_roi_localbg_excluding_cells_allrois.mat');
+end
 fprintf('Saving output MAT: %s\n', out_mat);
 save(out_mat, ...
     'trace_raw_roi', 'trace_raw_bg', 'trace_raw_minus_bg', 'trace_temporal_weights', ...
@@ -239,6 +280,15 @@ save(out_mat, ...
     'source_run_dir', 'source_extract_mat', 'source_movie_h5', 'params', '-v7.3');
 
 fprintf('Saved: %s\n', out_mat);
+
+result = struct();
+result.out_mat = out_mat;
+result.n_roi = n_roi;
+result.n_frames = n_frames;
+result.invalid_bg_count = nnz(invalid_bg);
+result.source_extract_mat = source_extract_mat;
+result.source_movie_h5 = source_movie_h5;
+end
 
 %% ---- local functions ----
 function p = find_single_file(dir_path, pattern)
@@ -362,4 +412,21 @@ end
 
 error(['Could not infer movie dimensions from H5 size and spatial_weights. ', ...
     'H5 size=%s, spatial [h,w]=[%d,%d].'], mat2str(mov_size), h, w);
+end
+
+function opts = parse_name_values(opts, args)
+if isempty(args)
+    return;
+end
+if mod(numel(args), 2) ~= 0
+    error('Name-value arguments must be paired.');
+end
+for i = 1:2:numel(args)
+    key = char(args{i});
+    val = args{i + 1};
+    if ~isfield(opts, key)
+        error('Unknown option: %s', key);
+    end
+    opts.(key) = val;
+end
 end
