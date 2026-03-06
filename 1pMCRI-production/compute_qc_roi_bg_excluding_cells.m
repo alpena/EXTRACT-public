@@ -19,7 +19,7 @@ repo_root = fileparts(script_dir);
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 addpath(genpath(fullfile(repo_root, 'External algorithms')));
 
-run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810_t2000';
+run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810';
 roi_thresh_frac = 0.20;
 bg_radius_px = 30;
 bg_radius_step_px = 10;
