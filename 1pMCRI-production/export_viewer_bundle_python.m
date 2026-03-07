@@ -149,21 +149,14 @@ end
 write_string_dataset(out_h5, '/meta/version', opts.version);
 write_string_dataset(out_h5, '/meta/source_extract_mat', extract_mat);
 
-h5create(out_h5, '/roi/h', 1, 'Datatype', 'int64');
-h5write(out_h5, '/roi/h', int64(h));
-h5create(out_h5, '/roi/w', 1, 'Datatype', 'int64');
-h5write(out_h5, '/roi/w', int64(w));
-h5create(out_h5, '/roi/n_cells', 1, 'Datatype', 'int64');
-h5write(out_h5, '/roi/n_cells', int64(n_cells));
+write_scalar_dataset(out_h5, '/roi/h', int64(h), 'int64');
+write_scalar_dataset(out_h5, '/roi/w', int64(w), 'int64');
+write_scalar_dataset(out_h5, '/roi/n_cells', int64(n_cells), 'int64');
 
-h5create(out_h5, '/roi/sparse_csr/data', size(csr_data), 'Datatype', 'single');
-h5write(out_h5, '/roi/sparse_csr/data', csr_data);
-h5create(out_h5, '/roi/sparse_csr/indices', size(csr_indices), 'Datatype', 'int32');
-h5write(out_h5, '/roi/sparse_csr/indices', csr_indices);
-h5create(out_h5, '/roi/sparse_csr/indptr', size(csr_indptr), 'Datatype', 'int64');
-h5write(out_h5, '/roi/sparse_csr/indptr', csr_indptr);
-h5create(out_h5, '/roi/sparse_csr/shape', size(csr_shape), 'Datatype', 'int64');
-h5write(out_h5, '/roi/sparse_csr/shape', csr_shape);
+write_numeric_vector_dataset(out_h5, '/roi/sparse_csr/data', csr_data, 'single');
+write_numeric_vector_dataset(out_h5, '/roi/sparse_csr/indices', csr_indices, 'int32');
+write_numeric_vector_dataset(out_h5, '/roi/sparse_csr/indptr', csr_indptr, 'int64');
+write_numeric_vector_dataset(out_h5, '/roi/sparse_csr/shape', csr_shape, 'int64');
 
 write_py2d_dataset(out_h5, '/trace/temporal_weights', T, 'single');
 
@@ -198,6 +191,32 @@ if ~isempty(movie_h5)
     write_string_dataset(out_h5, '/movie/path_h5', movie_h5);
     write_string_dataset(out_h5, '/movie/dataset', opts.movie_dataset);
 end
+
+required_paths = { ...
+    '/meta/version', ...
+    '/meta/source_extract_mat', ...
+    '/roi/h', ...
+    '/roi/w', ...
+    '/roi/n_cells', ...
+    '/roi/sparse_csr/data', ...
+    '/roi/sparse_csr/indices', ...
+    '/roi/sparse_csr/indptr', ...
+    '/roi/sparse_csr/shape', ...
+    '/roi/centroid_xy', ...
+    '/trace/temporal_weights'};
+if ~isempty(trace_spike_prob)
+    required_paths{end + 1} = '/trace/spike_prob';
+end
+if ~isempty(trace_raw_roi)
+    required_paths{end + 1} = '/trace/raw_roi';
+end
+if ~isempty(trace_raw_bg)
+    required_paths{end + 1} = '/trace/raw_bg';
+end
+if ~isempty(trace_raw_minus_bg)
+    required_paths{end + 1} = '/trace/raw_minus_bg';
+end
+verify_required_bundle_datasets(out_h5, required_paths);
 
 out = struct();
 out.run_dir = run_dir;
@@ -343,6 +362,7 @@ elseif size(Tin, 2) == n_cells
 else
     error('Trace cell dimension mismatch: size=%s, n_cells=%d', mat2str(size(Tin)), n_cells);
 end
+end
 
 function T = read_cascade_spike_prob_h5(cascade_h5, n_cells)
 info = h5info(cascade_h5);
@@ -352,7 +372,6 @@ if ~ismember('spike_prob', names)
 end
 Tin = h5read(cascade_h5, '/spike_prob');
 T = normalize_trace_orientation(single(Tin), n_cells);
-end
 end
 
 function T_out = align_trace_time(T_in, t_base)
@@ -438,17 +457,58 @@ bytes = uint8(txt(:)');
 if isempty(bytes)
     bytes = uint8(0);
 end
-h5create(h5_path, ds_path, size(bytes), 'Datatype', 'uint8');
-h5write(h5_path, ds_path, bytes);
+write_numeric_vector_dataset(h5_path, ds_path, bytes, 'uint8');
+end
+
+function write_scalar_dataset(h5_path, ds_path, value, dtype_name)
+h5create(h5_path, ds_path, [1 1], 'Datatype', dtype_name, 'ChunkSize', [1 1]);
+h5write(h5_path, ds_path, reshape(value, [1 1]));
+verify_dataset_exists(h5_path, ds_path);
+end
+
+function write_numeric_vector_dataset(h5_path, ds_path, arr, dtype_name)
+arr = arr(:);
+n = numel(arr);
+chunk_len = max(1, min(n, 1048576));
+h5create(h5_path, ds_path, [n 1], 'Datatype', dtype_name, 'ChunkSize', [chunk_len 1]);
+for start_idx = 1:chunk_len:n
+    end_idx = min(n, start_idx + chunk_len - 1);
+    chunk = arr(start_idx:end_idx);
+    h5write(h5_path, ds_path, chunk, [start_idx 1], [numel(chunk) 1]);
+end
+verify_dataset_exists(h5_path, ds_path);
 end
 
 function write_py2d_dataset(h5_path, ds_path, arr_py, dtype_name)
 if ndims(arr_py) ~= 2
     error('write_py2d_dataset expects 2D array. got size=%s', mat2str(size(arr_py)));
 end
-arr_store = arr_py.';
-h5create(h5_path, ds_path, size(arr_store), 'Datatype', dtype_name);
-h5write(h5_path, ds_path, arr_store);
+store_h = size(arr_py, 2);
+store_w = size(arr_py, 1);
+chunk_h = max(1, min(store_h, 256));
+chunk_w = max(1, min(store_w, 256));
+h5create(h5_path, ds_path, [store_h, store_w], 'Datatype', dtype_name, ...
+    'ChunkSize', [chunk_h, chunk_w]);
+for row_start = 1:chunk_h:store_h
+    row_end = min(store_h, row_start + chunk_h - 1);
+    chunk = arr_py(:, row_start:row_end).';
+    h5write(h5_path, ds_path, chunk, [row_start 1], size(chunk));
+end
+verify_dataset_exists(h5_path, ds_path);
+end
+
+function verify_required_bundle_datasets(h5_path, ds_paths)
+for i = 1:numel(ds_paths)
+    verify_dataset_exists(h5_path, ds_paths{i});
+end
+end
+
+function verify_dataset_exists(h5_path, ds_path)
+try
+    h5info(h5_path, ds_path);
+catch ME
+    error('Bundle write verification failed for %s (%s): %s', ds_path, h5_path, ME.message);
+end
 end
 
 function opts = parse_name_values(opts, args)
