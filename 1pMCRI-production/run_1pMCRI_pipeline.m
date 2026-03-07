@@ -272,7 +272,7 @@ meta.elapsed_sec = elapsed_sec;
 meta.n_cells = n_cells;
 meta.timestamp = char(datetime('now', 'Format', 'yyyy-MM-dd''T''HH:mm:ss'));
 
-save(save_path, 'output', 'config_used', 'meta', '-v7.3');
+save(save_path, 'output', 'config_used', 'meta', '-v7.3', '-nocompression');
 fprintf('Saved result: %s\n', save_path);
 
 result = struct();
