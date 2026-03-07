@@ -9,7 +9,7 @@ function out = export_viewer_bundle_python(varargin)
 % Name-value options:
 %   run_dir       : pipeline run directory (default smoke example)
 %   extract_mat   : EXTRACT output MAT (required if auto-discovery fails)
-%   cascade_mat   : optional cascade MAT with spike_prob
+%   cascade_h5    : optional cascade HDF5 with spike_prob
 %   qc_mat        : optional QC MAT from compute_qc_roi_bg_excluding_cells
 %   movie_h5      : optional source movie H5 path
 %   movie_dataset : movie dataset path in H5 (default '/mov')
@@ -21,7 +21,7 @@ function out = export_viewer_bundle_python(varargin)
 opts = struct();
 opts.run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810';
 opts.extract_mat = '';
-opts.cascade_mat = '';
+opts.cascade_h5 = '';
 opts.qc_mat = '';
 opts.movie_h5 = '';
 opts.movie_dataset = '/mov';
@@ -35,12 +35,12 @@ repo_root = fileparts(script_dir);
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 addpath(genpath(fullfile(repo_root, 'External algorithms')));
 
-[extract_mat, cascade_mat, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts);
+[extract_mat, cascade_h5, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts);
 
 if opts.verbose
     fprintf('run_dir    : %s\n', run_dir);
     fprintf('extract_mat: %s\n', extract_mat);
-    fprintf('cascade_mat: %s\n', to_str(cascade_mat));
+    fprintf('cascade_h5 : %s\n', to_str(cascade_h5));
     fprintf('qc_mat     : %s\n', to_str(qc_mat));
     fprintf('movie_h5   : %s\n', to_str(movie_h5));
     fprintf('out_h5     : %s\n', out_h5);
@@ -109,13 +109,12 @@ trace_raw_roi = [];
 trace_raw_bg = [];
 trace_raw_minus_bg = [];
 
-if ~isempty(cascade_mat) && isfile(cascade_mat)
-    C = load(cascade_mat, 'spike_prob');
-    if isfield(C, 'spike_prob') && ~isempty(C.spike_prob)
-        sp = normalize_trace_orientation(single(C.spike_prob), n_cells);
+if ~isempty(cascade_h5) && isfile(cascade_h5)
+    sp = read_cascade_spike_prob_h5(cascade_h5, n_cells);
+    if ~isempty(sp)
         trace_spike_prob = align_trace_time(sp, T_base);
     else
-        warning('cascade_mat has no spike_prob. Skipped.');
+        warning('cascade_h5 has no spike_prob. Skipped.');
     end
 end
 
@@ -203,7 +202,7 @@ end
 out = struct();
 out.run_dir = run_dir;
 out.extract_mat = extract_mat;
-out.cascade_mat = cascade_mat;
+out.cascade_h5 = cascade_h5;
 out.qc_mat = qc_mat;
 out.movie_h5 = movie_h5;
 out.movie_dataset = opts.movie_dataset;
@@ -219,9 +218,9 @@ end
 
 end
 
-function [extract_mat, cascade_mat, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts)
+function [extract_mat, cascade_h5, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts)
 extract_mat = strtrim(char(opts.extract_mat));
-cascade_mat = strtrim(char(opts.cascade_mat));
+cascade_h5 = strtrim(char(opts.cascade_h5));
 qc_mat = strtrim(char(opts.qc_mat));
 movie_h5 = strtrim(char(opts.movie_h5));
 out_h5 = strtrim(char(opts.out_h5));
@@ -259,16 +258,16 @@ if ~isempty(movie_h5) && ~isfile(movie_h5)
     error('movie_h5 not found: %s', movie_h5);
 end
 
-if isempty(cascade_mat)
-    cands = dir(fullfile(artifact_dir, 'cascade_prediction_*.mat'));
+if isempty(cascade_h5)
+    cands = dir(fullfile(artifact_dir, 'cascade_prediction_*.h5'));
     if numel(cands) == 1
-        cascade_mat = fullfile(cands(1).folder, cands(1).name);
+        cascade_h5 = fullfile(cands(1).folder, cands(1).name);
     else
-        cascade_mat = '';
+        cascade_h5 = '';
     end
 end
-if ~isempty(cascade_mat) && ~isfile(cascade_mat)
-    error('cascade_mat not found: %s', cascade_mat);
+if ~isempty(cascade_h5) && ~isfile(cascade_h5)
+    error('cascade_h5 not found: %s', cascade_h5);
 end
 
 if isempty(qc_mat)
@@ -343,6 +342,16 @@ elseif size(Tin, 2) == n_cells
     T = Tin';
 else
     error('Trace cell dimension mismatch: size=%s, n_cells=%d', mat2str(size(Tin)), n_cells);
+end
+
+function T = read_cascade_spike_prob_h5(cascade_h5, n_cells)
+info = h5info(cascade_h5);
+names = {info.Datasets.Name};
+if ~ismember('spike_prob', names)
+    error('spike_prob not found in CASCADE h5: %s', cascade_h5);
+end
+Tin = h5read(cascade_h5, '/spike_prob');
+T = normalize_trace_orientation(single(Tin), n_cells);
 end
 end
 

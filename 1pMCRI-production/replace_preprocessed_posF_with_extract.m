@@ -4,14 +4,14 @@ function result = replace_preprocessed_posF_with_extract(varargin)
 %
 % Inputs are resolved from a pipeline run_dir:
 %   - EXTRACT: run_dir/artifacts/output_*_moco_direct.mat
-%   - CASCADE: run_dir/artifacts/cascade_prediction_*.mat
+%   - CASCADE: run_dir/artifacts/cascade_prediction_*.h5
 %
 % Name-value options:
 %   run_dir           : pipeline output directory
 %                       (default: demo_data/output/smoke_250810)
 %   preprocessed_mat  : target preprocessed_data.mat to update (required)
 %   extract_mat       : optional explicit EXTRACT MAT override
-%   cascade_mat       : optional explicit CASCADE MAT override
+%   cascade_h5        : optional explicit CASCADE HDF5 override
 %   write_mode        : 'matfile' (default) | 'append'
 %
 % Replaced variables:
@@ -22,14 +22,14 @@ opts = struct();
 opts.run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810';
 opts.preprocessed_mat = '';
 opts.extract_mat = '';
-opts.cascade_mat = '';
+opts.cascade_h5 = '';
 opts.write_mode = 'matfile';
 opts = parse_name_values(opts, varargin);
 
 run_dir = char(opts.run_dir);
 preprocessed_mat = char(opts.preprocessed_mat);
 extract_mat = char(opts.extract_mat);
-cascade_mat = char(opts.cascade_mat);
+cascade_h5 = char(opts.cascade_h5);
 write_mode = lower(strtrim(char(opts.write_mode)));
 
 if isempty(preprocessed_mat)
@@ -50,14 +50,14 @@ end
 if isempty(extract_mat)
     extract_mat = find_single_file(artifact_dir, 'output_*_moco_direct.mat');
 end
-if isempty(cascade_mat)
-    cascade_mat = find_single_file(artifact_dir, 'cascade_prediction_*.mat');
+if isempty(cascade_h5)
+    cascade_h5 = find_single_file(artifact_dir, 'cascade_prediction_*.h5');
 end
 if ~isfile(extract_mat)
     error('EXTRACT output mat not found: %s', extract_mat);
 end
-if ~isfile(cascade_mat)
-    error('CASCADE mat not found: %s', cascade_mat);
+if ~isfile(cascade_h5)
+    error('CASCADE h5 not found: %s', cascade_h5);
 end
 
 script_dir = fileparts(mfilename('fullpath'));
@@ -67,7 +67,7 @@ addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 fprintf('run_dir          : %s\n', run_dir);
 fprintf('preprocessed_mat : %s\n', preprocessed_mat);
 fprintf('extract_mat      : %s\n', extract_mat);
-fprintf('cascade_mat      : %s\n', cascade_mat);
+fprintf('cascade_h5       : %s\n', cascade_h5);
 fprintf('write_mode       : %s\n', write_mode);
 
 import_opt = struct();
@@ -96,11 +96,7 @@ else
     S2 = sparse(reshape(S, h * w, n_cells));
 end
 
-C = load(cascade_mat, 'spike_prob');
-if ~isfield(C, 'spike_prob') || isempty(C.spike_prob)
-    error('spike_prob not found in CASCADE mat: %s', cascade_mat);
-end
-spk = single(C.spike_prob);
+spk = read_cascade_spike_prob_h5(cascade_h5, n_cells);
 if size(spk, 1) == n_cells
     F = spk;
 elseif size(spk, 2) == n_cells
@@ -140,7 +136,7 @@ result = struct();
 result.run_dir = run_dir;
 result.preprocessed_mat = preprocessed_mat;
 result.extract_mat = extract_mat;
-result.cascade_mat = cascade_mat;
+result.cascade_h5 = cascade_h5;
 result.pos_size = size(pos);
 result.F_size = size(F);
 result.transform_meta = transform_meta;
@@ -161,6 +157,18 @@ if numel(cands) > 1
     error('Multiple files matched (%s): %s', pattern, names);
 end
 p = fullfile(cands(1).folder, cands(1).name);
+end
+
+function spk = read_cascade_spike_prob_h5(cascade_h5, n_cells)
+info = h5info(cascade_h5);
+names = {info.Datasets.Name};
+if ~ismember('spike_prob', names)
+    error('spike_prob not found in CASCADE h5: %s', cascade_h5);
+end
+spk = single(h5read(cascade_h5, '/spike_prob'));
+if size(spk, 1) ~= n_cells && size(spk, 2) == n_cells
+    spk = spk';
+end
 end
 
 function [pos_out, meta] = apply_import_opt_transform(pos_pix, import_opt)
