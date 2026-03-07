@@ -10,6 +10,7 @@ function out = export_viewer_bundle_python(varargin)
 %   run_dir       : pipeline run directory (default smoke example)
 %   extract_mat   : EXTRACT output MAT (required if auto-discovery fails)
 %   cascade_h5    : optional cascade HDF5 with spike_prob
+%   postprocess_mat : optional postprocess MAT with dff/F0 metrics
 %   qc_mat        : optional QC MAT from compute_qc_roi_bg_excluding_cells
 %   movie_h5      : optional source movie H5 path
 %   movie_dataset : movie dataset path in H5 (default '/mov')
@@ -22,11 +23,12 @@ opts = struct();
 opts.run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810';
 opts.extract_mat = '';
 opts.cascade_h5 = '';
+opts.postprocess_mat = '';
 opts.qc_mat = '';
 opts.movie_h5 = '';
 opts.movie_dataset = '/mov';
 opts.out_h5 = '';
-opts.version = '1.0.0';
+opts.version = '1.1.0';
 opts.verbose = true;
 opts = parse_name_values(opts, varargin);
 
@@ -35,12 +37,13 @@ repo_root = fileparts(script_dir);
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 addpath(genpath(fullfile(repo_root, 'External algorithms')));
 
-[extract_mat, cascade_h5, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts);
+[extract_mat, cascade_h5, postprocess_mat, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts);
 
 if opts.verbose
     fprintf('run_dir    : %s\n', run_dir);
     fprintf('extract_mat: %s\n', extract_mat);
     fprintf('cascade_h5 : %s\n', to_str(cascade_h5));
+    fprintf('postprocess: %s\n', to_str(postprocess_mat));
     fprintf('qc_mat     : %s\n', to_str(qc_mat));
     fprintf('movie_h5   : %s\n', to_str(movie_h5));
     fprintf('out_h5     : %s\n', out_h5);
@@ -118,6 +121,8 @@ if ~isempty(cascade_h5) && isfile(cascade_h5)
     end
 end
 
+metric_payload = build_metric_payload(output, S2, n_cells, postprocess_mat, trace_spike_prob);
+
 if ~isempty(qc_mat) && isfile(qc_mat)
     Q = load(qc_mat);
     has_qc = isfield(Q, 'roi_id') && ...
@@ -173,6 +178,11 @@ if ~isempty(f_per_pixel)
 end
 
 write_py2d_dataset(out_h5, '/roi/centroid_xy', centroid_xy, 'single');
+write_string_list_dataset(out_h5, '/metric/names', metric_payload.names);
+write_string_list_dataset(out_h5, '/metric/display_names', metric_payload.display_names);
+write_string_list_dataset(out_h5, '/metric/source', metric_payload.source);
+write_py2d_dataset(out_h5, '/metric/values', metric_payload.values, 'single');
+write_py2d_dataset(out_h5, '/metric/valid', uint8(metric_payload.valid), 'uint8');
 
 if ~isempty(trace_spike_prob)
     write_py2d_dataset(out_h5, '/trace/spike_prob', trace_spike_prob, 'single');
@@ -203,6 +213,11 @@ required_paths = { ...
     '/roi/sparse_csr/indptr', ...
     '/roi/sparse_csr/shape', ...
     '/roi/centroid_xy', ...
+    '/metric/names', ...
+    '/metric/display_names', ...
+    '/metric/source', ...
+    '/metric/values', ...
+    '/metric/valid', ...
     '/trace/temporal_weights'};
 if ~isempty(trace_spike_prob)
     required_paths{end + 1} = '/trace/spike_prob';
@@ -222,6 +237,7 @@ out = struct();
 out.run_dir = run_dir;
 out.extract_mat = extract_mat;
 out.cascade_h5 = cascade_h5;
+out.postprocess_mat = postprocess_mat;
 out.qc_mat = qc_mat;
 out.movie_h5 = movie_h5;
 out.movie_dataset = opts.movie_dataset;
@@ -237,9 +253,10 @@ end
 
 end
 
-function [extract_mat, cascade_h5, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts)
+function [extract_mat, cascade_h5, postprocess_mat, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts)
 extract_mat = strtrim(char(opts.extract_mat));
 cascade_h5 = strtrim(char(opts.cascade_h5));
+postprocess_mat = strtrim(char(opts.postprocess_mat));
 qc_mat = strtrim(char(opts.qc_mat));
 movie_h5 = strtrim(char(opts.movie_h5));
 out_h5 = strtrim(char(opts.out_h5));
@@ -278,6 +295,9 @@ if ~isempty(movie_h5) && ~isfile(movie_h5)
 end
 
 if isempty(cascade_h5)
+    cascade_h5 = read_artifact_from_manifest(run_dir, 'cascade', 'output_h5');
+end
+if isempty(cascade_h5)
     cands = dir(fullfile(artifact_dir, 'cascade_prediction_*.h5'));
     if numel(cands) == 1
         cascade_h5 = fullfile(cands(1).folder, cands(1).name);
@@ -287,6 +307,21 @@ if isempty(cascade_h5)
 end
 if ~isempty(cascade_h5) && ~isfile(cascade_h5)
     error('cascade_h5 not found: %s', cascade_h5);
+end
+
+if isempty(postprocess_mat)
+    postprocess_mat = read_artifact_from_manifest(run_dir, 'postprocess', 'output_mat');
+end
+if isempty(postprocess_mat)
+    cands = dir(fullfile(artifact_dir, 'output_*_dff_*.mat'));
+    if numel(cands) == 1
+        postprocess_mat = fullfile(cands(1).folder, cands(1).name);
+    else
+        postprocess_mat = '';
+    end
+end
+if ~isempty(postprocess_mat) && ~isfile(postprocess_mat)
+    error('postprocess_mat not found: %s', postprocess_mat);
 end
 
 if isempty(qc_mat)
@@ -410,6 +445,447 @@ end
 for i = 1:numel(roi_id)
     full_trace(roi_id(i), 1:t_keep) = src_trace(i, 1:t_keep);
 end
+end
+
+function payload = build_metric_payload(output, S2, n_cells, postprocess_mat, trace_spike_prob)
+[names, display_names, source_names] = get_viewer_metric_spec();
+metric_map = containers.Map(names, num2cell(1:numel(names)));
+values = nan(numel(names), n_cells, 'single');
+valid = false(numel(names), n_cells);
+
+[values, valid] = assign_metric(values, valid, metric_map, ...
+    'roi_area_px', compute_roi_area_px(S2, n_cells), true(1, n_cells));
+[values, valid] = assign_metric(values, valid, metric_map, ...
+    'roi_weight_max', compute_roi_weight_max(S2, n_cells), true(1, n_cells));
+
+[values, valid] = fill_extract_metrics(values, valid, metric_map, output, n_cells);
+[values, valid] = fill_postprocess_metrics(values, valid, metric_map, postprocess_mat, n_cells);
+[values, valid] = fill_cascade_metrics(values, valid, metric_map, trace_spike_prob, n_cells);
+
+payload = struct();
+payload.names = names;
+payload.display_names = display_names;
+payload.source = source_names;
+payload.values = values;
+payload.valid = valid;
+end
+
+function [names, display_names, source_names] = get_viewer_metric_spec()
+names = { ...
+    'extract_T_maxval', ...
+    'extract_S_corruption', ...
+    'extract_S_eccent', ...
+    'extract_S_area_1', ...
+    'extract_S_smooth_area_1', ...
+    'extract_S_area_2', ...
+    'extract_S_max_corr', ...
+    'extract_ST2_index_4', ...
+    'extract_ST_corr_3', ...
+    'extract_T_dup_val', ...
+    'extract_is_rejected', ...
+    'extract_is_tiny', ...
+    'extract_is_huge', ...
+    'extract_is_duplicate', ...
+    'extract_is_spurious', ...
+    'post_dff_std', ...
+    'post_dff_p95', ...
+    'post_dff_max', ...
+    'post_F0_cell', ...
+    'cascade_spike_mean', ...
+    'cascade_spike_p95', ...
+    'cascade_spike_max', ...
+    'roi_area_px', ...
+    'roi_weight_max'};
+
+display_names = { ...
+    'EXTRACT T max value', ...
+    'EXTRACT spatial corruption', ...
+    'EXTRACT eccentricity', ...
+    'EXTRACT area 1', ...
+    'EXTRACT smooth area 1', ...
+    'EXTRACT area 2', ...
+    'EXTRACT spatial max corr', ...
+    'EXTRACT ST2 index 4', ...
+    'EXTRACT ST corr 3', ...
+    'EXTRACT T duplicate value', ...
+    'EXTRACT rejected', ...
+    'EXTRACT tiny', ...
+    'EXTRACT huge', ...
+    'EXTRACT duplicate', ...
+    'EXTRACT spurious', ...
+    'Post dF/F std', ...
+    'Post dF/F p95', ...
+    'Post dF/F max', ...
+    'Post F0 cell', ...
+    'Cascade spike mean', ...
+    'Cascade spike p95', ...
+    'Cascade spike max', ...
+    'ROI area px', ...
+    'ROI weight max'};
+
+source_names = { ...
+    'extract', ...
+    'extract', ...
+    'extract', ...
+    'extract', ...
+    'extract', ...
+    'extract', ...
+    'extract', ...
+    'extract', ...
+    'extract', ...
+    'extract', ...
+    'derived', ...
+    'derived', ...
+    'derived', ...
+    'derived', ...
+    'derived', ...
+    'postprocess', ...
+    'postprocess', ...
+    'postprocess', ...
+    'postprocess', ...
+    'cascade', ...
+    'cascade', ...
+    'cascade', ...
+    'derived', ...
+    'derived'};
+end
+
+function [values, valid] = assign_metric(values, valid, metric_map, metric_name, metric_values, metric_valid)
+if ~isKey(metric_map, metric_name)
+    error('Unknown metric_name: %s', metric_name);
+end
+idx = metric_map(metric_name);
+row = single(metric_values(:)');
+if size(values, 2) ~= numel(row)
+    error('Metric %s size mismatch: expected %d, got %d', metric_name, size(values, 2), numel(row));
+end
+mask = logical(metric_valid(:)');
+if numel(mask) ~= numel(row)
+    error('Metric %s validity size mismatch.', metric_name);
+end
+values(idx, :) = row;
+valid(idx, :) = mask;
+end
+
+function [values, valid] = fill_extract_metrics(values, valid, metric_map, output, n_cells)
+if ~isfield(output, 'info') || ~isstruct(output.info) || ...
+        ~isfield(output.info, 'cellcheck') || ~isstruct(output.info.cellcheck) || ...
+        ~isfield(output.info.cellcheck, 'metrics') || isempty(output.info.cellcheck.metrics)
+    return;
+end
+
+metrics = orient_metric_table(output.info.cellcheck.metrics, n_cells);
+[fmap, ~] = get_quality_metric_map();
+
+raw_specs = { ...
+    'extract_T_maxval', 'T_maxval'; ...
+    'extract_S_corruption', 'S_corruption'; ...
+    'extract_S_eccent', 'S_eccent'; ...
+    'extract_S_area_1', 'S_area_1'; ...
+    'extract_S_smooth_area_1', 'S_smooth_area_1'; ...
+    'extract_S_area_2', 'S_area_2'; ...
+    'extract_S_max_corr', 'S_max_corr'; ...
+    'extract_ST2_index_4', 'ST2_index_4'; ...
+    'extract_ST_corr_3', 'ST_corr_3'; ...
+    'extract_T_dup_val', 'T_dup_val'};
+
+for i = 1:size(raw_specs, 1)
+    key_out = raw_specs{i, 1};
+    key_in = raw_specs{i, 2};
+    if isKey(fmap, key_in)
+        row = single(metrics(fmap(key_in), :));
+        row_valid = isfinite(row);
+        [values, valid] = assign_metric(values, valid, metric_map, key_out, row, row_valid);
+    end
+end
+
+derived = compute_extract_classification_metrics(output, metrics, fmap, n_cells);
+derived_names = fieldnames(derived);
+for i = 1:numel(derived_names)
+    name = derived_names{i};
+    entry = derived.(name);
+    [values, valid] = assign_metric(values, valid, metric_map, name, entry.values, entry.valid);
+end
+end
+
+function metrics = orient_metric_table(metric_table, n_cells)
+metric_table = single(metric_table);
+if size(metric_table, 2) == n_cells
+    metrics = metric_table;
+elseif size(metric_table, 1) == n_cells
+    metrics = metric_table';
+else
+    error('Could not infer cellcheck metric orientation: size=%s, n_cells=%d', ...
+        mat2str(size(metric_table)), n_cells);
+end
+end
+
+function derived = compute_extract_classification_metrics(output, metrics, fmap, n_cells)
+derived = struct();
+default_false = false(1, n_cells);
+default_nan = nan(1, n_cells, 'single');
+
+required_metric_keys = { ...
+    'T_maxval', 'S_corruption', 'S_eccent', 'S_area_1', 'S_smooth_area_1', ...
+    'S_area_2', 'ST2_index_4', 'ST_corr_3', 'T_dup_val', 'S_max_corr'};
+for i = 1:numel(required_metric_keys)
+    if ~isKey(fmap, required_metric_keys{i})
+        derived.extract_is_rejected = make_metric_entry(default_nan, default_false);
+        derived.extract_is_tiny = make_metric_entry(default_nan, default_false);
+        derived.extract_is_huge = make_metric_entry(default_nan, default_false);
+        derived.extract_is_duplicate = make_metric_entry(default_nan, default_false);
+        derived.extract_is_spurious = make_metric_entry(default_nan, default_false);
+        return;
+    end
+end
+
+if ~isfield(output, 'config') || ~isstruct(output.config) || ...
+        ~isfield(output.config, 'thresholds') || ~isstruct(output.config.thresholds) || ...
+        ~isfield(output.config, 'avg_cell_radius') || isempty(output.config.avg_cell_radius)
+    derived.extract_is_rejected = make_metric_entry(default_nan, default_false);
+    derived.extract_is_tiny = make_metric_entry(default_nan, default_false);
+    derived.extract_is_huge = make_metric_entry(default_nan, default_false);
+    derived.extract_is_duplicate = make_metric_entry(default_nan, default_false);
+    derived.extract_is_spurious = make_metric_entry(default_nan, default_false);
+    return;
+end
+
+th = output.config.thresholds;
+avg_cell_area = pi * double(output.config.avg_cell_radius) .^ 2;
+
+m_T_maxval = double(metrics(fmap('T_maxval'), :));
+m_S_corr = double(metrics(fmap('S_corruption'), :));
+m_S_ecc = double(metrics(fmap('S_eccent'), :));
+m_S_area1 = double(metrics(fmap('S_area_1'), :));
+m_S_smooth_area1 = double(metrics(fmap('S_smooth_area_1'), :));
+m_S_area2 = double(metrics(fmap('S_area_2'), :));
+m_ST2_4 = double(metrics(fmap('ST2_index_4'), :));
+m_ST_corr3 = double(metrics(fmap('ST_corr_3'), :));
+m_T_dup = double(metrics(fmap('T_dup_val'), :));
+m_S_max_corr = double(metrics(fmap('S_max_corr'), :));
+
+size_lower_px = double(th.size_lower_limit) * avg_cell_area;
+size_upper_px = double(th.size_upper_limit) * avg_cell_area;
+
+is_T_zeroed = (m_T_maxval <= double(th.T_min_snr));
+is_S_tiny = (max(m_S_area1, m_S_smooth_area1) <= size_lower_px) | (m_S_smooth_area1 == 0);
+is_S_huge = (m_S_area2 ./ max(1, -2 + m_S_ecc)) >= size_upper_px;
+is_S_poor_looking = (m_S_corr >= double(th.spatial_corrupt_thresh));
+is_S_poor_eccent = (m_S_ecc >= double(th.eccent_thresh));
+is_T_duplicate = (m_T_dup >= double(th.T_dup_corr_thresh));
+is_S_duplicate = (m_S_max_corr >= double(th.S_dup_corr_thresh));
+is_ST_spurious = (m_ST2_4 <= double(th.low_ST_index_thresh)) | ...
+                  (m_ST_corr3 < double(th.low_ST_corr_thresh));
+
+is_duplicate = is_T_duplicate | is_S_duplicate;
+is_spurious = is_ST_spurious | is_S_poor_looking | is_S_poor_eccent | is_T_zeroed;
+is_rejected = is_T_zeroed | is_S_tiny | is_S_huge | ...
+              is_S_poor_looking | is_S_poor_eccent | is_duplicate | is_ST_spurious;
+
+all_valid = true(1, n_cells);
+derived.extract_is_rejected = make_metric_entry(single(is_rejected), all_valid);
+derived.extract_is_tiny = make_metric_entry(single(is_S_tiny), all_valid);
+derived.extract_is_huge = make_metric_entry(single(is_S_huge), all_valid);
+derived.extract_is_duplicate = make_metric_entry(single(is_duplicate), all_valid);
+derived.extract_is_spurious = make_metric_entry(single(is_spurious), all_valid);
+end
+
+function [values, valid] = fill_postprocess_metrics(values, valid, metric_map, postprocess_mat, n_cells)
+if isempty(postprocess_mat) || ~isfile(postprocess_mat)
+    return;
+end
+
+[dff, F0_cell] = read_postprocess_data(postprocess_mat, n_cells);
+if isempty(dff)
+    return;
+end
+
+dff_std = rowwise_std(dff);
+dff_p95 = rowwise_percentile(dff, 95);
+dff_max = rowwise_max(dff);
+f0 = single(F0_cell(:)');
+if numel(f0) ~= n_cells
+    f0 = nan(1, n_cells, 'single');
+    f0_valid = false(1, n_cells);
+else
+    f0_valid = isfinite(f0);
+end
+
+[values, valid] = assign_metric(values, valid, metric_map, 'post_dff_std', dff_std, isfinite(dff_std));
+[values, valid] = assign_metric(values, valid, metric_map, 'post_dff_p95', dff_p95, isfinite(dff_p95));
+[values, valid] = assign_metric(values, valid, metric_map, 'post_dff_max', dff_max, isfinite(dff_max));
+[values, valid] = assign_metric(values, valid, metric_map, 'post_F0_cell', f0, f0_valid);
+end
+
+function [dff, F0_cell] = read_postprocess_data(postprocess_mat, n_cells)
+dff = [];
+F0_cell = [];
+try
+    M = matfile(postprocess_mat);
+    dff = single(M.dff);
+    F0_cell = single(M.F0_cell);
+catch
+    L = load(postprocess_mat, 'dff', 'F0_cell');
+    if isfield(L, 'dff')
+        dff = single(L.dff);
+    end
+    if isfield(L, 'F0_cell')
+        F0_cell = single(L.F0_cell);
+    end
+end
+if isempty(dff)
+    return;
+end
+dff = normalize_trace_orientation(dff, n_cells);
+if isempty(F0_cell)
+    F0_cell = nan(n_cells, 1, 'single');
+else
+    F0_cell = single(F0_cell(:));
+end
+end
+
+function [values, valid] = fill_cascade_metrics(values, valid, metric_map, trace_spike_prob, n_cells)
+if isempty(trace_spike_prob)
+    return;
+end
+spike = single(trace_spike_prob);
+if size(spike, 1) ~= n_cells
+    spike = normalize_trace_orientation(spike, n_cells);
+end
+spike_mean = rowwise_mean(spike);
+spike_p95 = rowwise_percentile(spike, 95);
+spike_max = rowwise_max(spike);
+
+[values, valid] = assign_metric(values, valid, metric_map, 'cascade_spike_mean', spike_mean, isfinite(spike_mean));
+[values, valid] = assign_metric(values, valid, metric_map, 'cascade_spike_p95', spike_p95, isfinite(spike_p95));
+[values, valid] = assign_metric(values, valid, metric_map, 'cascade_spike_max', spike_max, isfinite(spike_max));
+end
+
+function area_px = compute_roi_area_px(S2, n_cells)
+[~, jj, vv] = find(S2);
+keep = vv > 0;
+counts = accumarray(jj(keep), 1, [n_cells, 1], @sum, 0);
+area_px = single(counts(:)');
+end
+
+function roi_weight_max = compute_roi_weight_max(S2, n_cells)
+[~, jj, vv] = find(S2);
+keep = vv > 0;
+if ~any(keep)
+    roi_weight_max = zeros(1, n_cells, 'single');
+    return;
+end
+roi_weight_max = single(accumarray(jj(keep), vv(keep), [n_cells, 1], @max, 0));
+roi_weight_max = roi_weight_max(:)';
+end
+
+function entry = make_metric_entry(values, valid)
+entry = struct();
+entry.values = single(values(:)');
+entry.valid = logical(valid(:)');
+end
+
+function out = rowwise_mean(X)
+X = double(X);
+mask = isfinite(X);
+tmp = X;
+tmp(~mask) = 0;
+den = sum(mask, 2);
+out = single(sum(tmp, 2) ./ max(den, 1));
+out(den == 0) = nan;
+out = out(:)';
+end
+
+function out = rowwise_std(X)
+X = double(X);
+mask = isfinite(X);
+tmp = X;
+tmp(~mask) = 0;
+den = sum(mask, 2);
+mu = sum(tmp, 2) ./ max(den, 1);
+sq = bsxfun(@minus, X, mu) .^ 2;
+sq(~mask) = 0;
+den2 = max(den - 1, 1);
+out = single(sqrt(sum(sq, 2) ./ den2));
+out(den <= 1) = nan;
+out = out(:)';
+end
+
+function out = rowwise_max(X)
+X = single(X);
+mask = isfinite(X);
+tmp = X;
+tmp(~mask) = -inf;
+out = max(tmp, [], 2);
+out(~any(mask, 2)) = nan;
+out = single(out(:)');
+end
+
+function out = rowwise_percentile(X, p)
+n_rows = size(X, 1);
+out = nan(1, n_rows, 'single');
+for i = 1:n_rows
+    vals = double(X(i, isfinite(X(i, :))));
+    if isempty(vals)
+        continue;
+    end
+    out(i) = single(prctile(vals, p));
+end
+end
+
+function path_out = read_artifact_from_manifest(run_dir, stage_name, output_key)
+path_out = '';
+manifest_path = fullfile(run_dir, 'manifests', [stage_name '.json']);
+if ~isfile(manifest_path)
+    return;
+end
+try
+    data = jsondecode(fileread(manifest_path));
+catch
+    return;
+end
+if ~isstruct(data) || ~isfield(data, 'status') || ~strcmpi(char(data.status), 'completed')
+    return;
+end
+if ~isfield(data, 'outputs') || ~isstruct(data.outputs) || ~isfield(data.outputs, output_key)
+    return;
+end
+value = data.outputs.(output_key);
+if isempty(value)
+    return;
+end
+candidate = char(value);
+if is_absolute_path(candidate)
+    path_out = candidate;
+else
+    path_out = fullfile(run_dir, candidate);
+end
+end
+
+function tf = is_absolute_path(path_in)
+if isempty(path_in)
+    tf = false;
+    return;
+end
+tf = startsWith(path_in, '/') || startsWith(path_in, '\\') || ...
+    ~isempty(regexp(path_in, '^[A-Za-z]:[\\/]', 'once'));
+end
+
+function write_string_list_dataset(h5_path, ds_path, values)
+if isempty(values)
+    error('write_string_list_dataset requires at least one value.');
+end
+max_len = max(cellfun(@numel, values));
+max_len = max(1, max_len);
+arr = zeros(numel(values), max_len, 'uint8');
+for i = 1:numel(values)
+    txt = char(values{i});
+    bytes = uint8(txt(:)');
+    if ~isempty(bytes)
+        arr(i, 1:numel(bytes)) = bytes;
+    end
+end
+write_py2d_dataset(h5_path, ds_path, arr, 'uint8');
 end
 
 function cent_xy = compute_centroids_xy(S2, h, w)
