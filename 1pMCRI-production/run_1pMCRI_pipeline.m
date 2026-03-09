@@ -60,6 +60,7 @@ num_partitions_x = get_opt(opts, 'num_partitions_x', []);
 num_partitions_y = get_opt(opts, 'num_partitions_y', []);
 avg_event_tau = get_opt(opts, 'avg_event_tau', []);
 remove_background = get_opt(opts, 'remove_background', []);
+cleanup_fast_cache = get_opt(opts, 'cleanup_fast_cache', true);
 
 if ispc
     default_fast_h5_dir = fullfile('E:\', 'EXTRACT-cache');
@@ -271,6 +272,24 @@ meta.gpu_id = gpu_id;
 meta.elapsed_sec = elapsed_sec;
 meta.n_cells = n_cells;
 meta.timestamp = char(datetime('now', 'Format', 'yyyy-MM-dd''T''HH:mm:ss'));
+
+cleanup_report = struct();
+cleanup_report.enabled = logical(cleanup_fast_cache);
+cleanup_report.deleted = {};
+cleanup_report.skipped = {};
+cleanup_report.missing = {};
+cleanup_report.failed = {};
+if cleanup_fast_cache
+    cleanup_targets = {h5_path};
+    if ~isempty(fast_tiff_path)
+        cleanup_targets{end + 1} = fast_tiff_path; %#ok<AGROW>
+    end
+    if input_h5_preoptimized && ~isempty(fast_input_h5_path)
+        cleanup_targets{end + 1} = fast_input_h5_path; %#ok<AGROW>
+    end
+    cleanup_report = cleanup_fast_cache_files(cleanup_targets, fast_h5_dir);
+end
+meta.cleanup_fast_cache = cleanup_report;
 
 save(save_path, 'output', 'config_used', 'meta', '-v7.3', '-nocompression');
 fprintf('Saved result: %s\n', save_path);
@@ -553,6 +572,56 @@ if out_dims(1) ~= verify_expected_h || out_dims(2) ~= verify_expected_w || out_d
         'for %s:%s'], ...
         verify_expected_h, verify_expected_w, expected_t, out_dims(1), out_dims(2), out_dims(3), ...
         output_h5, output_dataset_name);
+end
+end
+
+function report = cleanup_fast_cache_files(targets, fast_h5_dir)
+report = struct();
+report.enabled = true;
+report.deleted = {};
+report.skipped = {};
+report.missing = {};
+report.failed = {};
+
+fast_root_cmp = normalize_path_for_compare(fast_h5_dir);
+seen = {};
+for i = 1:numel(targets)
+    target = char(targets{i});
+    if isempty(target)
+        continue;
+    end
+    target_cmp = normalize_path_for_compare(target);
+    if any(strcmp(seen, target_cmp))
+        continue;
+    end
+    seen{end + 1} = target_cmp; %#ok<AGROW>
+
+    if ~startsWith(target_cmp, fast_root_cmp)
+        report.skipped{end + 1} = target; %#ok<AGROW>
+        continue;
+    end
+    if ~isfile(target)
+        report.missing{end + 1} = target; %#ok<AGROW>
+        continue;
+    end
+
+    try
+        delete(target);
+        report.deleted{end + 1} = target; %#ok<AGROW>
+        fprintf('Deleted fast-drive cache file: %s\n', target);
+    catch ME
+        report.failed{end + 1} = sprintf('%s :: %s', target, ME.message); %#ok<AGROW>
+        warning('Failed to delete fast-drive cache file: %s\n%s', target, ME.message);
+    end
+end
+end
+
+function norm_path = normalize_path_for_compare(path_in)
+norm_path = char(path_in);
+norm_path = strrep(norm_path, '/', filesep);
+norm_path = strrep(norm_path, '\', filesep);
+if ispc
+    norm_path = lower(norm_path);
 end
 end
 
