@@ -296,8 +296,15 @@ try
     L = load(result_path, 'output');
     if isfield(L, 'output') && isfield(L.output, 'temporal_weights')
         Tin = single(L.output.temporal_weights);
-        n_cells_guess = max(size(Tin));
-        T = temporal_to_cells_by_time(Tin, n_cells_guess);
+        n_cells_hint = [];
+        if isfield(L.output, 'spatial_weights') && ~isempty(L.output.spatial_weights)
+            try
+                [~, n_cells_hint] = spatial_to_2d(L.output.spatial_weights);
+            catch
+                n_cells_hint = [];
+            end
+        end
+        T = orient_extract_temporal_weights(Tin, n_cells_hint);
         return;
     end
 catch ME
@@ -311,14 +318,29 @@ catch ME
 end
 
 Tin = single(Tin);
+T = orient_extract_temporal_weights(Tin, []);
+end
+
+function T = orient_extract_temporal_weights(Tin, n_cells_hint)
+Tin = single(Tin);
 if ndims(Tin) ~= 2
     error('output.temporal_weights must be 2D, got ndims=%d', ndims(Tin));
 end
-if size(Tin, 1) <= size(Tin, 2)
-    T = Tin;
-else
-    T = Tin';
+
+if nargin >= 2 && ~isempty(n_cells_hint)
+    if size(Tin, 1) == n_cells_hint && size(Tin, 2) ~= n_cells_hint
+        T = Tin;
+        return;
+    end
+    if size(Tin, 2) == n_cells_hint && size(Tin, 1) ~= n_cells_hint
+        T = Tin';
+        return;
+    end
 end
+
+% Preserve EXTRACT native temporal_weights orientation unless a reliable
+% cell-count hint says it must be transposed.
+T = Tin;
 end
 
 function F0_cell = compute_f0_cell(S2, Fpix)
