@@ -52,47 +52,56 @@ script_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(script_dir);
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 
-L = load(result_path, 'output');
-if ~isfield(L, 'output')
-    error('No output struct found in: %s', result_path);
-end
-output = L.output;
-
-required_fields = {'spatial_weights', 'temporal_weights', 'info'};
-for i = 1:numel(required_fields)
-    if ~isfield(output, required_fields{i})
-        error('output.%s is missing.', required_fields{i});
-    end
-end
-if ~isfield(output.info, 'F_per_pixel') || isempty(output.info.F_per_pixel)
-    error('output.info.F_per_pixel is missing or empty.');
-end
-
-fprintf('Loading spatial weights and temporal weights...\n');
-[S2, n_cells] = spatial_to_2d(output.spatial_weights);
-T = temporal_to_cells_by_time(output.temporal_weights, n_cells); % cells x frames
-[n_cells_t, n_frames] = size(T);
-if n_cells_t ~= n_cells
-    error('Cell count mismatch: spatial=%d, temporal=%d', n_cells, n_cells_t);
-end
-
-Fpix = single(output.info.F_per_pixel(:)); % [h*w x 1]
-if size(S2, 1) ~= numel(Fpix)
-    error('Spatial size mismatch: numel(F_per_pixel)=%d, size(S2,1)=%d', ...
-        numel(Fpix), size(S2, 1));
-end
-
-fprintf('Computing per-cell baseline anchor F0_cell from F_per_pixel...\n');
-F0_cell = compute_f0_cell(S2, Fpix); % [n_cells x 1]
-F_est = bsxfun(@plus, T, F0_cell);   % [cells x frames]
-
+F0_cell = [];
+F_est = [];
+F0_t = [];
 win = NaN;
+
+if strcmp(baseline_mode, 'extract_temporal')
+    fprintf(['Loading temporal_weights directly from MAT/HDF5 for extract_temporal mode ', ...
+        '(avoids loading unrelated EXTRACT summary fields)...\n']);
+    T = load_temporal_weights_only(result_path);
+    [n_cells, n_frames] = size(T);
+else
+    L = load(result_path, 'output');
+    if ~isfield(L, 'output')
+        error('No output struct found in: %s', result_path);
+    end
+    output = L.output;
+
+    required_fields = {'spatial_weights', 'temporal_weights', 'info'};
+    for i = 1:numel(required_fields)
+        if ~isfield(output, required_fields{i})
+            error('output.%s is missing.', required_fields{i});
+        end
+    end
+    if ~isfield(output.info, 'F_per_pixel') || isempty(output.info.F_per_pixel)
+        error('output.info.F_per_pixel is missing or empty.');
+    end
+
+    fprintf('Loading spatial weights and temporal weights...\n');
+    [S2, n_cells] = spatial_to_2d(output.spatial_weights);
+    T = temporal_to_cells_by_time(output.temporal_weights, n_cells); % cells x frames
+    [n_cells_t, n_frames] = size(T);
+    if n_cells_t ~= n_cells
+        error('Cell count mismatch: spatial=%d, temporal=%d', n_cells, n_cells_t);
+    end
+
+    Fpix = single(output.info.F_per_pixel(:)); % [h*w x 1]
+    if size(S2, 1) ~= numel(Fpix)
+        error('Spatial size mismatch: numel(F_per_pixel)=%d, size(S2,1)=%d', ...
+            numel(Fpix), size(S2, 1));
+    end
+
+    fprintf('Computing per-cell baseline anchor F0_cell from F_per_pixel...\n');
+    F0_cell = compute_f0_cell(S2, Fpix); % [n_cells x 1]
+    F_est = bsxfun(@plus, T, F0_cell);   % [cells x frames]
+end
+
 switch baseline_mode
     case 'extract_temporal'
         fprintf('Using EXTRACT temporal_weights directly as dff (no recomputation).\n');
         dff = single(T);
-        F_est = [];
-        F0_t = [];
     case 'global_percentile'
         fprintf('Computing global percentile baseline: q=%g over full trace\n', percentile_q);
         F0_const = single(prctile(F_est, percentile_q, 2));
@@ -272,6 +281,36 @@ elseif size(Tin, 1) == n_cells
     T = Tin;
 else
     error('Could not infer temporal_weights orientation.');
+end
+end
+
+function T = load_temporal_weights_only(result_path)
+try
+    L = load(result_path, 'output');
+    if isfield(L, 'output') && isfield(L.output, 'temporal_weights')
+        Tin = single(L.output.temporal_weights);
+        n_cells_guess = max(size(Tin));
+        T = temporal_to_cells_by_time(Tin, n_cells_guess);
+        return;
+    end
+catch ME
+    fprintf('load(..., ''output'') failed, falling back to h5read: %s\n', ME.message);
+end
+
+try
+    Tin = h5read(result_path, '/output/temporal_weights');
+catch ME
+    error('Failed to read /output/temporal_weights from %s: %s', result_path, ME.message);
+end
+
+Tin = single(Tin);
+if ndims(Tin) ~= 2
+    error('output.temporal_weights must be 2D, got ndims=%d', ndims(Tin));
+end
+if size(Tin, 1) <= size(Tin, 2)
+    T = Tin;
+else
+    T = Tin';
 end
 end
 
