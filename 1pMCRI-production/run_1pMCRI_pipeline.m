@@ -47,6 +47,7 @@ verbose = get_opt(opts, 'verbose', 2);
 trace_output_option = get_opt(opts, 'trace_output_option', '');
 use_gpu = get_opt(opts, 'use_gpu', true);
 parallel_cpu = get_opt(opts, 'parallel_cpu', false);
+num_workers = get_opt(opts, 'num_workers', []);
 force_rebuild_h5 = get_opt(opts, 'force_rebuild_h5', false);
 h5_skip_if_exists = get_opt(opts, 'h5_skip_if_exists', true);
 h5_chunk_t = get_opt(opts, 'h5_chunk_t', 256);
@@ -206,6 +207,9 @@ config.parallel_cpu = parallel_cpu;
 config.multi_gpu = false;
 config.pick_gpu = gpu_id;
 config.use_default_gpu = false;
+if ~isempty(num_workers)
+    config.num_workers = num_workers;
+end
 config.num_frames = n_frames;
 config.downsample_time_by = downsample_time_by;
 config.avg_cell_radius = avg_cell_radius;
