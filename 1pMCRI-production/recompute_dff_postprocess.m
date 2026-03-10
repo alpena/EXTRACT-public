@@ -1,5 +1,5 @@
 function result = recompute_dff_postprocess(result_path, opts)
-% Recompute post-hoc dF/F from EXTRACT output and save as pipeline artifact.
+% Recompute post-hoc dF/F from EXTRACT output and save as canonical HDF5 artifact.
 %
 % Inputs
 %   result_path : path to EXTRACT output MAT that contains struct `output`
@@ -14,7 +14,7 @@ function result = recompute_dff_postprocess(result_path, opts)
 %       moving_decimate_factor     (default 10)
 %       moving_percentile_use_parfor (default true)
 %       save_output                (default true)
-%       save_path                  (default auto)
+%       save_path                  (default auto .h5 path)
 %       plot_n_cells               (default 0; 0 disables plot)
 %       rng_seed                   (default 1)
 %       save_figure                (default false)
@@ -157,8 +157,11 @@ switch baseline_mode
 end
 
 [out_dir, out_name, ~] = fileparts(result_path);
-default_out_mat = fullfile(out_dir, sprintf('%s_dff_%s.mat', out_name, suffix));
-out_mat = get_opt(opts, 'save_path', default_out_mat);
+default_out_h5 = fullfile(out_dir, sprintf('%s_dff_%s.h5', out_name, suffix));
+out_h5 = get_opt(opts, 'save_path', default_out_h5);
+if ~endsWith(lower(char(out_h5)), '.h5')
+    error('postprocess save_path must end with .h5: %s', out_h5);
+end
 
 fig_png = '';
 if plot_n_cells > 0 || save_figure
@@ -237,16 +240,20 @@ meta.moving_percentile_impl = moving_percentile_impl;
 meta.moving_decimate_factor = moving_decimate_factor;
 meta.nan_inf_fail_ratio = nan_inf_fail_ratio;
 meta.bad_ratio = bad_ratio;
+meta.n_cells = size(dff, 1);
+meta.n_frames = size(dff, 2);
+meta.orientation = 'cells_by_frames';
+meta.output_format = 'postprocess_h5_v1';
 meta.timestamp = char(datetime('now', 'Format', 'yyyy-MM-dd''T''HH:mm:ss'));
 
 if save_output
-    save(out_mat, 'dff', 'F_est', 'F0_t', 'F0_cell', 'meta', '-v7.3');
-    fprintf('Saved dF/F mat: %s\n', out_mat);
+    write_postprocess_h5(out_h5, dff, F_est, F0_t, F0_cell, meta);
+    fprintf('Saved dF/F HDF5: %s\n', out_h5);
 end
 
 result = struct();
 result.dff = dff;
-result.output_path = out_mat;
+result.output_path = out_h5;
 result.fig_path = fig_png;
 result.meta = meta;
 end
@@ -405,5 +412,108 @@ for c = 1:n_chunks
         end
     end
     Y(c_begin:c_end, :) = Yi;
+end
+end
+
+function write_postprocess_h5(out_h5, dff, F_est, F0_t, F0_cell, meta)
+if isfile(out_h5)
+    delete(out_h5);
+end
+
+[n_cells, n_frames] = size(dff);
+write_h5_2d_dataset(out_h5, '/dff', single(dff));
+if ~isempty(F_est)
+    write_h5_2d_dataset(out_h5, '/F_est', single(F_est));
+end
+if ~isempty(F0_t)
+    write_h5_2d_dataset(out_h5, '/F0_t', single(F0_t));
+end
+if ~isempty(F0_cell)
+    write_h5_vector_dataset(out_h5, '/F0_cell', single(F0_cell(:)));
+end
+
+write_h5_scalar_dataset(out_h5, '/meta/n_cells', int64(n_cells), 'int64');
+write_h5_scalar_dataset(out_h5, '/meta/n_frames', int64(n_frames), 'int64');
+write_h5_scalar_dataset(out_h5, '/meta/frame_rate_hz', single(meta.frame_rate_hz), 'single');
+write_h5_scalar_dataset(out_h5, '/meta/half_window_sec', single(meta.half_window_sec), 'single');
+write_h5_scalar_dataset(out_h5, '/meta/percentile_q', single(meta.percentile_q), 'single');
+write_h5_scalar_dataset(out_h5, '/meta/moving_decimate_factor', int64(meta.moving_decimate_factor), 'int64');
+write_h5_scalar_dataset(out_h5, '/meta/nan_inf_fail_ratio', single(meta.nan_inf_fail_ratio), 'single');
+write_h5_scalar_dataset(out_h5, '/meta/bad_ratio', single(meta.bad_ratio), 'single');
+write_h5_string_dataset(out_h5, '/meta/orientation', meta.orientation);
+write_h5_string_dataset(out_h5, '/meta/output_format', meta.output_format);
+write_h5_string_dataset(out_h5, '/meta/baseline_mode', meta.baseline_mode);
+write_h5_string_dataset(out_h5, '/meta/source_result_path', meta.source_result_path);
+write_h5_string_dataset(out_h5, '/meta/timestamp', meta.timestamp);
+
+verify_postprocess_h5(out_h5, n_cells, n_frames, meta.baseline_mode);
+end
+
+function write_h5_scalar_dataset(h5_path, ds_path, value, dtype_name)
+h5create(h5_path, ds_path, [1 1], 'Datatype', dtype_name, 'ChunkSize', [1 1]);
+h5write(h5_path, ds_path, reshape(value, [1 1]));
+end
+
+function write_h5_string_dataset(h5_path, ds_path, txt)
+txt = char(txt);
+bytes = uint8(txt(:)');
+if isempty(bytes)
+    bytes = uint8(0);
+end
+h5create(h5_path, ds_path, [numel(bytes) 1], 'Datatype', 'uint8', 'ChunkSize', [numel(bytes) 1]);
+h5write(h5_path, ds_path, reshape(bytes, [numel(bytes) 1]));
+end
+
+function write_h5_2d_dataset(h5_path, ds_path, arr)
+arr = single(arr);
+[store_rows, store_cols] = size(arr.');
+chunk_rows = max(1, min(store_rows, 2048));
+chunk_cols = max(1, min(store_cols, 256));
+h5create(h5_path, ds_path, [store_rows store_cols], 'Datatype', 'single', ...
+    'ChunkSize', [chunk_rows chunk_cols]);
+
+store = arr.';
+for row_begin = 1:chunk_rows:store_rows
+    row_end = min(store_rows, row_begin + chunk_rows - 1);
+    block = store(row_begin:row_end, :);
+    h5write(h5_path, ds_path, block, [row_begin 1], size(block));
+end
+end
+
+function write_h5_vector_dataset(h5_path, ds_path, arr)
+arr = single(arr(:));
+n = numel(arr);
+chunk_len = max(1, min(n, 1048576));
+h5create(h5_path, ds_path, [n 1], 'Datatype', 'single', 'ChunkSize', [chunk_len 1]);
+h5write(h5_path, ds_path, reshape(arr, [n 1]));
+end
+
+function verify_postprocess_h5(h5_path, n_cells, n_frames, baseline_mode)
+info = h5info(h5_path, '/dff');
+if numel(info.Dataspace.Size) ~= 2
+    error('postprocess /dff must be 2D after write.');
+end
+orientation = read_h5_string_dataset(h5_path, '/meta/orientation');
+if ~strcmp(orientation, 'cells_by_frames')
+    error('postprocess /meta/orientation mismatch: %s', orientation);
+end
+stored_cells = h5read(h5_path, '/meta/n_cells');
+stored_frames = h5read(h5_path, '/meta/n_frames');
+if stored_cells ~= n_cells || stored_frames ~= n_frames
+    error('postprocess metadata shape mismatch after write.');
+end
+if strcmp(baseline_mode, 'extract_temporal')
+    return;
+end
+h5info(h5_path, '/F0_t');
+h5info(h5_path, '/F_est');
+end
+
+function txt = read_h5_string_dataset(h5_path, ds_path)
+raw = h5read(h5_path, ds_path);
+txt = char(raw(:)');
+null_idx = find(txt == char(0), 1, 'first');
+if ~isempty(null_idx)
+    txt = txt(1:null_idx - 1);
 end
 end

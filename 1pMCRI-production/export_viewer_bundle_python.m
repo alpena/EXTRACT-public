@@ -10,7 +10,7 @@ function out = export_viewer_bundle_python(varargin)
 %   run_dir       : pipeline run directory (default smoke example)
 %   extract_mat   : EXTRACT output MAT (required if auto-discovery fails)
 %   cascade_h5    : optional cascade HDF5 with spike_prob
-%   postprocess_mat : optional postprocess MAT with dff/F0 metrics
+%   postprocess_h5  : optional postprocess HDF5 with canonical dff/F0 metrics
 %   qc_mat        : optional QC MAT from compute_qc_roi_bg_excluding_cells
 %   movie_h5      : optional source movie H5 path
 %   movie_dataset : movie dataset path in H5 (default '/mov')
@@ -23,7 +23,7 @@ opts = struct();
 opts.run_dir = 'R:/code/1pMCRI-pipeline/demo_data/output/smoke_250810';
 opts.extract_mat = '';
 opts.cascade_h5 = '';
-opts.postprocess_mat = '';
+opts.postprocess_h5 = '';
 opts.qc_mat = '';
 opts.movie_h5 = '';
 opts.movie_dataset = '/mov';
@@ -37,13 +37,13 @@ repo_root = fileparts(script_dir);
 addpath(genpath(fullfile(repo_root, 'EXTRACT')));
 addpath(genpath(fullfile(repo_root, 'External algorithms')));
 
-[extract_mat, cascade_h5, postprocess_mat, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts);
+[extract_mat, cascade_h5, postprocess_h5, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts);
 
 if opts.verbose
     fprintf('run_dir    : %s\n', run_dir);
     fprintf('extract_mat: %s\n', extract_mat);
     fprintf('cascade_h5 : %s\n', to_str(cascade_h5));
-    fprintf('postprocess: %s\n', to_str(postprocess_mat));
+    fprintf('postprocess: %s\n', to_str(postprocess_h5));
     fprintf('qc_mat     : %s\n', to_str(qc_mat));
     fprintf('movie_h5   : %s\n', to_str(movie_h5));
     fprintf('out_h5     : %s\n', out_h5);
@@ -121,7 +121,7 @@ if ~isempty(cascade_h5) && isfile(cascade_h5)
     end
 end
 
-metric_payload = build_metric_payload(output, S2, n_cells, postprocess_mat, trace_spike_prob);
+metric_payload = build_metric_payload(output, S2, n_cells, postprocess_h5, trace_spike_prob);
 
 if ~isempty(qc_mat) && isfile(qc_mat)
     Q = load(qc_mat);
@@ -237,7 +237,7 @@ out = struct();
 out.run_dir = run_dir;
 out.extract_mat = extract_mat;
 out.cascade_h5 = cascade_h5;
-out.postprocess_mat = postprocess_mat;
+out.postprocess_h5 = postprocess_h5;
 out.qc_mat = qc_mat;
 out.movie_h5 = movie_h5;
 out.movie_dataset = opts.movie_dataset;
@@ -253,10 +253,10 @@ end
 
 end
 
-function [extract_mat, cascade_h5, postprocess_mat, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts)
+function [extract_mat, cascade_h5, postprocess_h5, qc_mat, movie_h5, out_h5, run_dir] = resolve_paths(opts)
 extract_mat = strtrim(char(opts.extract_mat));
 cascade_h5 = strtrim(char(opts.cascade_h5));
-postprocess_mat = strtrim(char(opts.postprocess_mat));
+postprocess_h5 = strtrim(char(opts.postprocess_h5));
 qc_mat = strtrim(char(opts.qc_mat));
 movie_h5 = strtrim(char(opts.movie_h5));
 out_h5 = strtrim(char(opts.out_h5));
@@ -309,19 +309,19 @@ if ~isempty(cascade_h5) && ~isfile(cascade_h5)
     error('cascade_h5 not found: %s', cascade_h5);
 end
 
-if isempty(postprocess_mat)
-    postprocess_mat = read_artifact_from_manifest(run_dir, 'postprocess', 'output_mat');
+if isempty(postprocess_h5)
+    postprocess_h5 = read_artifact_from_manifest(run_dir, 'postprocess', 'output_h5');
 end
-if isempty(postprocess_mat)
-    cands = dir(fullfile(artifact_dir, 'output_*_dff_*.mat'));
+if isempty(postprocess_h5)
+    cands = dir(fullfile(artifact_dir, 'output_*_dff_*.h5'));
     if numel(cands) == 1
-        postprocess_mat = fullfile(cands(1).folder, cands(1).name);
+        postprocess_h5 = fullfile(cands(1).folder, cands(1).name);
     else
-        postprocess_mat = '';
+        postprocess_h5 = '';
     end
 end
-if ~isempty(postprocess_mat) && ~isfile(postprocess_mat)
-    error('postprocess_mat not found: %s', postprocess_mat);
+if ~isempty(postprocess_h5) && ~isfile(postprocess_h5)
+    error('postprocess_h5 not found: %s', postprocess_h5);
 end
 
 if isempty(qc_mat)
@@ -447,7 +447,7 @@ for i = 1:numel(roi_id)
 end
 end
 
-function payload = build_metric_payload(output, S2, n_cells, postprocess_mat, trace_spike_prob)
+function payload = build_metric_payload(output, S2, n_cells, postprocess_h5, trace_spike_prob)
 [names, display_names, source_names] = get_viewer_metric_spec();
 metric_map = containers.Map(names, num2cell(1:numel(names)));
 values = nan(numel(names), n_cells, 'single');
@@ -459,7 +459,7 @@ valid = false(numel(names), n_cells);
     'roi_weight_max', compute_roi_weight_max(S2, n_cells), true(1, n_cells));
 
 [values, valid] = fill_extract_metrics(values, valid, metric_map, output, n_cells);
-[values, valid] = fill_postprocess_metrics(values, valid, metric_map, postprocess_mat, n_cells);
+[values, valid] = fill_postprocess_metrics(values, valid, metric_map, postprocess_h5, n_cells);
 [values, valid] = fill_cascade_metrics(values, valid, metric_map, trace_spike_prob, n_cells);
 
 payload = struct();
@@ -690,12 +690,12 @@ derived.extract_is_duplicate = make_metric_entry(single(is_duplicate), all_valid
 derived.extract_is_spurious = make_metric_entry(single(is_spurious), all_valid);
 end
 
-function [values, valid] = fill_postprocess_metrics(values, valid, metric_map, postprocess_mat, n_cells)
-if isempty(postprocess_mat) || ~isfile(postprocess_mat)
+function [values, valid] = fill_postprocess_metrics(values, valid, metric_map, postprocess_h5, n_cells)
+if isempty(postprocess_h5) || ~isfile(postprocess_h5)
     return;
 end
 
-[dff, F0_cell] = read_postprocess_data(postprocess_mat, n_cells);
+[dff, F0_cell] = read_postprocess_data(postprocess_h5, n_cells);
 if isempty(dff)
     return;
 end
@@ -717,30 +717,49 @@ end
 [values, valid] = assign_metric(values, valid, metric_map, 'post_F0_cell', f0, f0_valid);
 end
 
-function [dff, F0_cell] = read_postprocess_data(postprocess_mat, n_cells)
+function [dff, F0_cell] = read_postprocess_data(postprocess_h5, n_cells)
 dff = [];
 F0_cell = [];
-try
-    M = matfile(postprocess_mat);
-    dff = single(M.dff);
-    F0_cell = single(M.F0_cell);
-catch
-    L = load(postprocess_mat, 'dff', 'F0_cell');
-    if isfield(L, 'dff')
-        dff = single(L.dff);
-    end
-    if isfield(L, 'F0_cell')
-        F0_cell = single(L.F0_cell);
-    end
+[stored_cells, stored_frames, orientation] = read_postprocess_h5_meta(postprocess_h5);
+if ~strcmp(orientation, 'cells_by_frames')
+    error('postprocess_h5 orientation must be cells_by_frames: %s', orientation);
 end
-if isempty(dff)
-    return;
+
+dff = single(h5read(postprocess_h5, '/dff'));
+if isequal(size(dff), [stored_frames, stored_cells])
+    dff = dff';
+elseif ~isequal(size(dff), [stored_cells, stored_frames])
+    error('postprocess_h5 /dff shape mismatch: got %s expected [%d %d]', ...
+        mat2str(size(dff)), stored_cells, stored_frames);
 end
-dff = normalize_trace_orientation(dff, n_cells);
+if stored_cells ~= n_cells
+    error('postprocess_h5 n_cells mismatch: expected %d got %d', n_cells, stored_cells);
+end
+
+if dataset_exists(postprocess_h5, '/F0_cell')
+    F0_cell = single(h5read(postprocess_h5, '/F0_cell'));
+else
+    F0_cell = nan(n_cells, 1, 'single');
+end
 if isempty(F0_cell)
     F0_cell = nan(n_cells, 1, 'single');
 else
     F0_cell = single(F0_cell(:));
+end
+end
+
+function [n_cells, n_frames, orientation] = read_postprocess_h5_meta(postprocess_h5)
+n_cells = double(h5read(postprocess_h5, '/meta/n_cells'));
+n_frames = double(h5read(postprocess_h5, '/meta/n_frames'));
+orientation = read_h5_string_dataset(postprocess_h5, '/meta/orientation');
+end
+
+function tf = dataset_exists(h5_path, ds_path)
+try
+    h5info(h5_path, ds_path);
+    tf = true;
+catch
+    tf = false;
 end
 end
 
@@ -869,6 +888,15 @@ if isempty(path_in)
 end
 tf = startsWith(path_in, '/') || startsWith(path_in, '\\') || ...
     ~isempty(regexp(path_in, '^[A-Za-z]:[\\/]', 'once'));
+end
+
+function txt = read_h5_string_dataset(h5_path, ds_path)
+raw = h5read(h5_path, ds_path);
+txt = char(raw(:)');
+null_idx = find(txt == char(0), 1, 'first');
+if ~isempty(null_idx)
+    txt = txt(1:null_idx - 1);
+end
 end
 
 function write_string_list_dataset(h5_path, ds_path, values)
