@@ -1,11 +1,13 @@
 function [M, config] = preprocess_movie(M, config)
 % Wrapper for collection of preprocessing routines
 
-    % Handle GPU errors
-    try
-        gpuDevice(1);
-    catch
-        config.use_gpu = 0;
+    % Respect the caller's assigned GPU instead of forcing device 1.
+    if config.use_gpu
+        try
+            config = select_extract_gpu(config);
+        catch
+            config.use_gpu = 0;
+        end
     end
 
     % Below are standard preprocessing steps, performed unless skipped by

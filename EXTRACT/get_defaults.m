@@ -11,6 +11,7 @@ function config = get_defaults(config)
     if ~isfield(config, 'use_gpu'), config.use_gpu = true; end
     if ~isfield(config, 'parallel_cpu'), config.parallel_cpu = false; end
     if ~isfield(config, 'multi_gpu'), config.multi_gpu = false; end
+    if ~isfield(config, 'debug_gpu_memory'), config.debug_gpu_memory = false; end
     % Also set config.num_workers to avoid automatic selection
     if ~isfield(config, 'use_sparse_arrays'), config.use_sparse_arrays = false; end
     if ~isfield(config, 'compact_output'), config.compact_output = 0; end

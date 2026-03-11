@@ -31,6 +31,7 @@ if isfield(config, 'multi_gpu') && config.multi_gpu
     end
     selected_gpu = mod(worker_id - 1, gpu_count) + 1;
 else
+    worker_id = [];
     if isfield(config, 'pick_gpu') && ~isempty(config.pick_gpu)
         selected_gpu = config.pick_gpu;
     else
@@ -52,4 +53,14 @@ device = gpuDevice(selected_gpu);
 gpu_name = device.Name;
 config.pick_gpu = selected_gpu;
 config.assigned_gpu_id = selected_gpu;
+
+if isfield(config, 'verbose') && config.verbose ~= 0
+    if isfield(config, 'multi_gpu') && config.multi_gpu
+        fprintf('%s: EXTRACT worker %d assigned GPU %d (%s)\n', ...
+            datestr(now), worker_id, selected_gpu, gpu_name);
+    else
+        fprintf('%s: EXTRACT assigned GPU %d (%s)\n', ...
+            datestr(now), selected_gpu, gpu_name);
+    end
+end
 end

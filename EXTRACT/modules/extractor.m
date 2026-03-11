@@ -257,8 +257,11 @@ if config.parallel_cpu || config.multi_gpu
         end
         config_this = config;
         if config_this.use_gpu
-            config_this = select_extract_gpu(config_this);
+            [config_this, gpu_id_this, gpu_name_this] = select_extract_gpu(config_this);
+            fprintf('%s: Partition %d using GPU %d (%s)\n', ...
+                datestr(now), idx_partition, gpu_id_this, gpu_name_this);
         end
+        config_this.partition_id = idx_partition;
         % If S_init is given, feed only part of it consistent with partition
         if ~isempty(config_this.S_init)
             S_init = config.S_init(fov_occupation(:), :);

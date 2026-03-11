@@ -47,6 +47,7 @@ verbose = get_opt(opts, 'verbose', 2);
 trace_output_option = get_opt(opts, 'trace_output_option', '');
 use_gpu = get_opt(opts, 'use_gpu', true);
 multi_gpu = get_opt(opts, 'multi_gpu', false);
+debug_gpu_memory = get_opt(opts, 'debug_gpu_memory', false);
 parallel_cpu = get_opt(opts, 'parallel_cpu', false);
 num_workers = get_opt(opts, 'num_workers', []);
 force_rebuild_h5 = get_opt(opts, 'force_rebuild_h5', false);
@@ -206,6 +207,7 @@ config.preprocess = true;
 config.use_gpu = use_gpu;
 config.parallel_cpu = parallel_cpu;
 config.multi_gpu = multi_gpu;
+config.debug_gpu_memory = logical(debug_gpu_memory);
 config.pick_gpu = gpu_id;
 config.use_default_gpu = false;
 if ~isempty(num_workers)
