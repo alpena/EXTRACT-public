@@ -46,6 +46,7 @@ cellfind_max_steps = get_opt(opts, 'cellfind_max_steps', []);
 verbose = get_opt(opts, 'verbose', 2);
 trace_output_option = get_opt(opts, 'trace_output_option', '');
 use_gpu = get_opt(opts, 'use_gpu', true);
+multi_gpu = get_opt(opts, 'multi_gpu', false);
 parallel_cpu = get_opt(opts, 'parallel_cpu', false);
 num_workers = get_opt(opts, 'num_workers', []);
 force_rebuild_h5 = get_opt(opts, 'force_rebuild_h5', false);
@@ -204,7 +205,7 @@ config = get_defaults([]);
 config.preprocess = true;
 config.use_gpu = use_gpu;
 config.parallel_cpu = parallel_cpu;
-config.multi_gpu = false;
+config.multi_gpu = multi_gpu;
 config.pick_gpu = gpu_id;
 config.use_default_gpu = false;
 if ~isempty(num_workers)
