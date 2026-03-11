@@ -5,7 +5,7 @@ end
 
 config = get_defaults(config);
 try
-    gpuDevice(1);
+    config = select_extract_gpu(config);
 catch
     config.use_gpu = 0;
     disp(datestr(now) + ": No GPU detected, using CPU instead")

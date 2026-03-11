@@ -104,12 +104,14 @@ if config.use_gpu && ~config.use_default_gpu && ~config.skip_parpool_calculation
         else
             avail_mem = max_mem;
             if isempty(config.pick_gpu)
-                gpuDevice(idx_max_mem);
+                selected_gpu = idx_max_mem;
             else
-                gpuDevice(config.pick_gpu)
+                selected_gpu = config.pick_gpu;
             end
+            gpuDevice(selected_gpu);
             dispfun(sprintf('\t \t \t - Selecting GPU device %d \n', ...
-                idx_max_mem), config.verbose ~= 0);
+                selected_gpu), config.verbose ~= 0);
+            config.pick_gpu = selected_gpu;
             config.multi_gpu = 0;
         end
     end
@@ -254,6 +256,9 @@ if config.parallel_cpu || config.multi_gpu
                 config.verbose ==2);
         end
         config_this = config;
+        if config_this.use_gpu
+            config_this = select_extract_gpu(config_this);
+        end
         % If S_init is given, feed only part of it consistent with partition
         if ~isempty(config_this.S_init)
             S_init = config.S_init(fov_occupation(:), :);
