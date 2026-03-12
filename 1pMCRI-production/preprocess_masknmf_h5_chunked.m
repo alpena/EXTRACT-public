@@ -52,6 +52,7 @@ use_gpu = logical(get_opt(opts, 'use_gpu', true));
 frame_begin = double(get_opt(opts, 'frame_begin', 1));
 frame_count = get_opt(opts, 'frame_count', []);
 verbose = double(get_opt(opts, 'verbose', 1));
+show_timing = logical(get_opt(opts, 'show_timing', true));
 
 if ~strcmp(orientation_fix, 'none') && ~strcmp(orientation_fix, 'transpose_xy')
     error('Unsupported orientation_fix: %s', orientation_fix);
@@ -143,6 +144,8 @@ catch
 end
 
 chunk_cfg = resolve_output_chunk_size(out_h, out_w, out_t, h5_chunk_y, h5_chunk_x, h5_chunk_t);
+time_total_start = tic;
+time_h5_setup_start = tic;
 create_output_h5(output_h5, output_dataset, out_h, out_w, out_t, chunk_cfg, h5_compression);
 create_f_per_pixel_dataset(output_h5, out_h, out_w);
 write_common_metadata(output_h5, input_h5, input_dataset, frame_begin, frame_end, orientation_fix, ...
@@ -154,6 +157,7 @@ if save_df
     write_common_metadata(output_df_h5, input_h5, input_dataset, frame_begin, frame_end, orientation_fix, ...
         avg_cell_radius, spatial_highpass_cutoff, partition_size_time);
 end
+time_h5_setup = toc(time_h5_setup_start);
 
 fprintf('Input H5           : %s:%s\n', input_h5, input_dataset);
 fprintf('Output H5          : %s:%s\n', output_h5, output_dataset);
@@ -167,37 +171,92 @@ fprintf('use_gpu            : %d\n', use_gpu);
 sum_image = zeros(out_h, out_w, 'double');
 [perframes_mean, startno_mean] = get_partition_starters(out_t, 2 * partition_size_time);
 fprintf('%s: Calculating F_per_pixel ...\n', now_stamp());
+time_mean_total = 0;
+time_mean_read_total = 0;
+time_mean_accum_total = 0;
 for idx = 1:numel(startno_mean)
+    time_mean_pass = tic;
     src_start = frame_begin + startno_mean(idx) - 1;
+    time_read = tic;
     block = read_input_block(input_h5, input_dataset, src_h, src_w, src_start, perframes_mean(idx), orientation_fix);
+    read_elapsed = toc(time_read);
+    time_mean_read_total = time_mean_read_total + read_elapsed;
+    time_accum = tic;
     sum_image = sum_image + double(sum(block, 3));
+    accum_elapsed = toc(time_accum);
+    time_mean_accum_total = time_mean_accum_total + accum_elapsed;
+    pass_elapsed = toc(time_mean_pass);
+    time_mean_total = time_mean_total + pass_elapsed;
     if verbose >= 1
         fprintf('\tmean pass %d/%d: frames %d-%d\n', idx, numel(startno_mean), src_start, src_start + perframes_mean(idx) - 1);
+        if show_timing
+            fprintf('\t  timing: total=%.3fs read=%.3fs accumulate=%.3fs\n', ...
+                pass_elapsed, read_elapsed, accum_elapsed);
+        end
     end
 end
+time_f_write = tic;
 F_per_pixel = single(sum_image / out_t);
 h5write(output_h5, '/F_per_pixel', F_per_pixel);
 if save_df
     h5write(output_df_h5, '/F_per_pixel', F_per_pixel);
 end
+time_f_per_pixel_write = toc(time_f_write);
 
 fprintf('%s: Running df + spatial highpass ...\n', now_stamp());
 [perframes_out, startno_out] = get_partition_starters(out_t, partition_size_time);
+time_hp_total = 0;
+time_hp_read_total = 0;
+time_hp_subtract_total = 0;
+time_hp_df_write_total = 0;
+time_hp_filter_total = 0;
+time_hp_write_total = 0;
 for idx = 1:numel(startno_out)
+    time_hp_pass = tic;
     src_start = frame_begin + startno_out(idx) - 1;
     dst_start = startno_out(idx);
+    time_read = tic;
     block = read_input_block(input_h5, input_dataset, src_h, src_w, src_start, perframes_out(idx), orientation_fix);
+    read_elapsed = toc(time_read);
+    time_hp_read_total = time_hp_read_total + read_elapsed;
+    time_subtract = tic;
     block = bsxfun(@minus, block, F_per_pixel);
+    subtract_elapsed = toc(time_subtract);
+    time_hp_subtract_total = time_hp_subtract_total + subtract_elapsed;
     if save_df
+        time_df_write = tic;
         h5write(output_df_h5, output_df_dataset, block, [1, 1, dst_start], [out_h, out_w, perframes_out(idx)]);
+        df_write_elapsed = toc(time_df_write);
+        time_hp_df_write_total = time_hp_df_write_total + df_write_elapsed;
+    else
+        df_write_elapsed = 0;
     end
+    time_filter = tic;
     block = spatial_bandpass(block, avg_cell_radius, spatial_highpass_cutoff, inf, use_gpu);
+    filter_elapsed = toc(time_filter);
+    time_hp_filter_total = time_hp_filter_total + filter_elapsed;
+    time_write = tic;
     h5write(output_h5, output_dataset, block, [1, 1, dst_start], [out_h, out_w, perframes_out(idx)]);
+    write_elapsed = toc(time_write);
+    time_hp_write_total = time_hp_write_total + write_elapsed;
+    pass_elapsed = toc(time_hp_pass);
+    time_hp_total = time_hp_total + pass_elapsed;
     if verbose >= 1
         fprintf('\thighpass pass %d/%d: frames %d-%d\n', idx, numel(startno_out), src_start, src_start + perframes_out(idx) - 1);
+        if show_timing
+            fprintf('\t  timing: total=%.3fs read=%.3fs subtract=%.3fs df_write=%.3fs highpass=%.3fs write=%.3fs\n', ...
+                pass_elapsed, read_elapsed, subtract_elapsed, df_write_elapsed, filter_elapsed, write_elapsed);
+        end
     end
 end
 
+time_total = toc(time_total_start);
+if show_timing
+    fprintf('Timing summary (sec): h5_setup=%.3f, mean_total=%.3f, mean_read=%.3f, mean_accumulate=%.3f, F_write=%.3f, highpass_total=%.3f, highpass_read=%.3f, subtract=%.3f, df_write=%.3f, highpass_filter=%.3f, output_write=%.3f, total=%.3f\n', ...
+        time_h5_setup, time_mean_total, time_mean_read_total, time_mean_accum_total, time_f_per_pixel_write, ...
+        time_hp_total, time_hp_read_total, time_hp_subtract_total, time_hp_df_write_total, ...
+        time_hp_filter_total, time_hp_write_total, time_total);
+end
 fprintf('%s: Preprocessing finished.\n', now_stamp());
 
 result = struct();
@@ -210,6 +269,19 @@ result.frame_end = frame_end;
 result.output_size = [out_h, out_w, out_t];
 result.chunk_size = [chunk_cfg.chunk_y, chunk_cfg.chunk_x, chunk_cfg.chunk_t];
 result.F_per_pixel_path = '/F_per_pixel';
+result.timing = struct( ...
+    'h5_setup_sec', time_h5_setup, ...
+    'mean_total_sec', time_mean_total, ...
+    'mean_read_sec', time_mean_read_total, ...
+    'mean_accumulate_sec', time_mean_accum_total, ...
+    'F_per_pixel_write_sec', time_f_per_pixel_write, ...
+    'highpass_total_sec', time_hp_total, ...
+    'highpass_read_sec', time_hp_read_total, ...
+    'subtract_sec', time_hp_subtract_total, ...
+    'df_write_sec', time_hp_df_write_total, ...
+    'highpass_filter_sec', time_hp_filter_total, ...
+    'output_write_sec', time_hp_write_total, ...
+    'total_sec', time_total);
 result.skipped = false;
 end
 

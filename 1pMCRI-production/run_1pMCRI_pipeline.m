@@ -30,6 +30,7 @@ end
 
 dataset_name = normalize_dataset_name(get_opt(opts, 'dataset_name', '/mov')); % EXTRACT input dataset
 masknmf_dataset_name = '/motion_corrected'; % fixed by design
+baseline_dataset_name = normalize_dataset_name(get_opt(opts, 'baseline_dataset_name', '/F_per_pixel'));
 
 chunk_t = get_opt(opts, 'chunk_t', 128);
 chunk_x = get_opt(opts, 'chunk_x', []);
@@ -45,6 +46,8 @@ max_iter = get_opt(opts, 'max_iter', 6);
 cellfind_max_steps = get_opt(opts, 'cellfind_max_steps', []);
 verbose = get_opt(opts, 'verbose', 2);
 trace_output_option = get_opt(opts, 'trace_output_option', '');
+preprocess = get_opt(opts, 'preprocess', true);
+compact_output = get_opt(opts, 'compact_output', true);
 use_gpu = get_opt(opts, 'use_gpu', true);
 multi_gpu = get_opt(opts, 'multi_gpu', false);
 debug_gpu_memory = get_opt(opts, 'debug_gpu_memory', false);
@@ -203,7 +206,18 @@ fprintf('Running EXTRACT on: %s\n', M);
 fprintf('Frames used: %d / %d\n', n_frames, total_frames);
 
 config = get_defaults([]);
-config.preprocess = true;
+config.preprocess = logical(preprocess);
+config.compact_output = logical(compact_output);
+if ~config.preprocess
+    try
+        config.F_per_pixel = single(h5read(h5_fast_path, baseline_dataset_name));
+        fprintf('Loaded baseline image from %s:%s\n', h5_fast_path, baseline_dataset_name);
+    catch ME
+        warning(['Failed to load baseline image for preprocessed movie from %s:%s\n', ...
+            'EXTRACT will fall back to assuming dfofed input.\n%s'], ...
+            h5_fast_path, baseline_dataset_name, ME.message);
+    end
+end
 config.use_gpu = use_gpu;
 config.parallel_cpu = parallel_cpu;
 config.multi_gpu = multi_gpu;
@@ -270,7 +284,10 @@ meta.fast_input_h5_path = fast_input_h5_path;
 meta.h5_path = h5_path;
 meta.h5_fast_path = h5_fast_path;
 meta.dataset_name = dataset_name;
+meta.baseline_dataset_name = baseline_dataset_name;
 meta.orientation_fix = orientation_fix;
+meta.preprocess = logical(preprocess);
+meta.compact_output = logical(compact_output);
 meta.frames_used = n_frames;
 meta.total_frames = total_frames;
 meta.movie_height = h;
