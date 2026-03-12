@@ -88,13 +88,14 @@ if isa(S, 'ndSparse')
     [h, w, n_cells] = size(S);
     S2 = sparse2d(S);
 else
-    S = single(S);
+    S = double(S);
     if ndims(S) ~= 3
         error('spatial_weights must be 3D or ndSparse.');
     end
     [h, w, n_cells] = size(S);
     S2 = sparse(reshape(S, h * w, n_cells));
 end
+S2 = double(S2);
 
 spk = read_cascade_spike_prob_h5(cascade_h5, n_cells);
 if size(spk, 1) == n_cells
