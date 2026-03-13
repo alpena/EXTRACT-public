@@ -46,7 +46,11 @@ if isfield(config, 'num_partitions_x') && ...
         isfield(config, 'num_partitions_y')
     do_auto_partition=0;
 end
-partition_overlap = ceil(config.avg_cell_radius * 2);
+if isfield(config, 'partition_overlap') && ~isempty(config.partition_overlap)
+    partition_overlap = config.partition_overlap;
+else
+    partition_overlap = ceil(config.avg_cell_radius * 2);
+end
 
 num_workers = 0;
 
