@@ -8,6 +8,7 @@ function config = get_defaults(config)
     if ~isfield(config, 'remove_duplicate_cells'), config.remove_duplicate_cells = true; end
     if ~isfield(config, 'T_dup_thresh'), config.T_dup_thresh = 0.9; end
     if ~isfield(config, 'S_corr_thresh'), config.S_corr_thresh = 0.1; end
+    if ~isfield(config, 'partition_core_margin'), config.partition_core_margin = []; end
     if ~isfield(config, 'use_gpu'), config.use_gpu = true; end
     if ~isfield(config, 'parallel_cpu'), config.parallel_cpu = false; end
     if ~isfield(config, 'multi_gpu'), config.multi_gpu = false; end

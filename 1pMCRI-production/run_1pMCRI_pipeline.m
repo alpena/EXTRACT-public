@@ -41,6 +41,7 @@ python_exe = get_opt(opts, 'python_exe', ''); % empty -> auto-detect
 quick_n_frames = get_opt(opts, 'quick_n_frames', inf);
 avg_cell_radius = get_opt(opts, 'avg_cell_radius', 6);
 partition_overlap = get_opt(opts, 'partition_overlap', []);
+partition_core_margin = get_opt(opts, 'partition_core_margin', []);
 gpu_id = get_opt(opts, 'gpu_id', 1);
 downsample_time_by = get_opt(opts, 'downsample_time_by', 5);
 max_iter = get_opt(opts, 'max_iter', 6);
@@ -233,6 +234,9 @@ config.downsample_time_by = downsample_time_by;
 config.avg_cell_radius = avg_cell_radius;
 if ~isempty(partition_overlap)
     config.partition_overlap = partition_overlap;
+end
+if ~isempty(partition_core_margin)
+    config.partition_core_margin = partition_core_margin;
 end
 config.max_iter = max_iter;
 if ~isempty(cellfind_max_steps)

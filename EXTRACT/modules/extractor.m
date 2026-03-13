@@ -51,6 +51,16 @@ if isfield(config, 'partition_overlap') && ~isempty(config.partition_overlap)
 else
     partition_overlap = ceil(config.avg_cell_radius * 2);
 end
+partition_core_margin = [];
+if isfield(config, 'partition_core_margin') && ~isempty(config.partition_core_margin)
+    partition_core_margin = config.partition_core_margin;
+    if partition_core_margin < 0
+        error('"config.partition_core_margin" must be >= 0.');
+    end
+    if partition_core_margin >= partition_overlap
+        error('"config.partition_core_margin" must be smaller than partition overlap.');
+    end
+end
 
 num_workers = 0;
 
@@ -249,8 +259,8 @@ if config.parallel_cpu || config.multi_gpu
 
         start_upload = posixtime(datetime);
         % Get current movie partition from full movie
-        [M_small, fov_occupation] = get_current_partition(...
-            M, npx, npy, npt, partition_overlap, idx_partition);
+        [M_small, fov_occupation, core_occupation_local] = get_current_partition(...
+            M, npx, npy, npt, partition_overlap, idx_partition, partition_core_margin);
         time_upload(idx_partition) = posixtime(datetime) - start_upload;
         
         % Sometimes partitions contain no signal. Terminate in that case
@@ -301,8 +311,15 @@ if config.parallel_cpu || config.multi_gpu
 
         % Run EXTRACT for current partition
         [S_this, T_this, summary_this] = run_extract(M_small, config_this);
-        dispfun(sprintf('\t \t \t Count: %d cells.\n', ...
-            size(S_this, 2)), config.verbose == 2);
+        raw_cell_count = size(S_this, 2);
+        if ~isempty(partition_core_margin) && ~isempty(S_this)
+            [keep_idx, ~] = filter_partition_cells_by_core(S_this, core_occupation_local);
+            S_this = S_this(:, keep_idx);
+            T_this = T_this(keep_idx, :);
+            summary_this = apply_core_keep_to_summary(summary_this, keep_idx);
+        end
+        dispfun(sprintf('\t \t \t Count: %d cells (%d retained after core filter).\n', ...
+            raw_cell_count, size(S_this, 2)), config.verbose == 2);
 
         % Un-trim the pixels
         if config.use_sparse_arrays
@@ -395,8 +412,8 @@ else
 
         start_upload = posixtime(datetime);
         % Get current movie partition from full movie
-        [M_small, fov_occupation] = get_current_partition(...
-            M, npx, npy, npt, partition_overlap, idx_partition);
+        [M_small, fov_occupation, core_occupation_local] = get_current_partition(...
+            M, npx, npy, npt, partition_overlap, idx_partition, partition_core_margin);
         time_upload(idx_partition) = posixtime(datetime) - start_upload;
         dispfun(sprintf('\t \t \t Upload finished in %.1f minutes ... \n', time_upload(idx_partition)/60),config.verbose == 2);
         io_time = io_time + time_upload(idx_partition);
@@ -441,8 +458,15 @@ else
 
         % Run EXTRACT for current partition
         [S_this, T_this, summary_this] = run_extract(M_small, config_this);
-        dispfun(sprintf('\t \t \t Count: %d cells.\n', ...
-            size(S_this, 2)), config.verbose ~= 0);
+        raw_cell_count = size(S_this, 2);
+        if ~isempty(partition_core_margin) && ~isempty(S_this)
+            [keep_idx, ~] = filter_partition_cells_by_core(S_this, core_occupation_local);
+            S_this = S_this(:, keep_idx);
+            T_this = T_this(keep_idx, :);
+            summary_this = apply_core_keep_to_summary(summary_this, keep_idx);
+        end
+        dispfun(sprintf('\t \t \t Count: %d cells (%d retained after core filter).\n', ...
+            raw_cell_count, size(S_this, 2)), config.verbose ~= 0);
 
         % Un-trim the pixels
         if config.use_sparse_arrays
@@ -575,4 +599,28 @@ dispfun(sprintf(...
         '%s: All done with EXTRACT! \n', ...
         datestr(now)), config.verbose ~=0);
 
+end
+
+function summary = apply_core_keep_to_summary(summary, keep_idx)
+    if isempty(summary) || isempty(keep_idx)
+        return;
+    end
+    if ~isfield(summary, 'classification') || isempty(summary.classification)
+        return;
+    end
+    for idx_class = 1:numel(summary.classification)
+        summary.classification(idx_class) = filter_classification_entry(summary.classification(idx_class), keep_idx);
+    end
+end
+
+function entry = filter_classification_entry(entry, keep_idx)
+    if isfield(entry, 'is_bad') && ~isempty(entry.is_bad)
+        entry.is_bad = entry.is_bad(keep_idx);
+    end
+    if isfield(entry, 'is_attr_bad') && ~isempty(entry.is_attr_bad)
+        entry.is_attr_bad = entry.is_attr_bad(:, keep_idx);
+    end
+    if isfield(entry, 'metrics') && ~isempty(entry.metrics)
+        entry.metrics = entry.metrics(:, keep_idx);
+    end
 end

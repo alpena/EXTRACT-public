@@ -1,16 +1,23 @@
-function [M_out, fov_occupation] = get_current_partition(...
-    M, npx, npy, npt, overlap, idx)
+function [M_out, fov_occupation, core_occupation_local] = get_current_partition(...
+    M, npx, npy, npt, overlap, idx, core_margin)
 % Slice the movie in the image dimensions to get current partition.
 %   M: 3-D movie matrix
 %   npx: number of partititons in the x dimension
 %   npy: number of partititons in the y dimension
 %   overlap: width of the overlap between adjacent partitions
 %   idx: current partition index
+%   core_margin: width of the non-admissible boundary band inside each
+%       interior partition boundary
 % returns:
 %   M_out: output 3-D movie matrix, sliced according to inputs
 %   fov_occupation: Binary 2-D array with 1's only for the current
 %   rectangular partitioned region
+%   core_occupation_local: Binary 2-D array in local partition coordinates
+%       with 1's for the admissible core region
     [h, w, t] = get_movie_size(M);
+    if nargin < 7 || isempty(core_margin)
+        core_margin = 0;
+    end
     % npt is either < t or =t
     if isempty(npt) || npt > t
         npt = t;
@@ -53,6 +60,30 @@ function [M_out, fov_occupation] = get_current_partition(...
     y_keep = y_keep(nz_top+1:end-nz_bottom);
     fov_occupation = false(h, w);
     fov_occupation(y_keep, x_keep) = true;
+    core_x_begin = x_keep(1);
+    core_x_end = x_keep(end);
+    core_y_begin = y_keep(1);
+    core_y_end = y_keep(end);
+    if core_margin > 0
+        if idx_partition_x > 1
+            core_x_begin = min(core_x_begin + core_margin, core_x_end);
+        end
+        if idx_partition_x < npx
+            core_x_end = max(core_x_end - core_margin, core_x_begin);
+        end
+        if idx_partition_y > 1
+            core_y_begin = min(core_y_begin + core_margin, core_y_end);
+        end
+        if idx_partition_y < npy
+            core_y_end = max(core_y_end - core_margin, core_y_begin);
+        end
+    end
+    core_occupation_local = false(numel(y_keep), numel(x_keep));
+    core_local_x_begin = core_x_begin - x_keep(1) + 1;
+    core_local_x_end = core_x_end - x_keep(1) + 1;
+    core_local_y_begin = core_y_begin - y_keep(1) + 1;
+    core_local_y_end = core_y_end - y_keep(1) + 1;
+    core_occupation_local(core_local_y_begin:core_local_y_end, core_local_x_begin:core_local_x_end) = true;
     %fprintf('\t \t \t Discarding a [%d px top, %d px bottom, %d px left, %d px right] inactive movie region. \n'...
     %    ,nz_top, nz_bottom, nz_left, nz_right);
     
