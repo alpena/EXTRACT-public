@@ -14,7 +14,7 @@ function [keep_idx, centroid_xy] = filter_partition_cells_by_core(S, core_mask_l
     yy = yy(:);
 
     for idx_cell = 1:n_cells
-        weights = full(single(S(:, idx_cell)));
+        weights = single(full(S(:, idx_cell)));
         total_weight = sum(weights);
         if total_weight <= 0
             keep_idx(idx_cell) = false;
