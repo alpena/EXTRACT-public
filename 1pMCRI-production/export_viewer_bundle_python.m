@@ -278,14 +278,14 @@ if ~isfolder(artifact_dir)
 end
 
 if isempty(extract_mat)
-    extract_mat = find_single_file(artifact_dir, 'output_*_moco_direct.mat');
+    extract_mat = find_single_file(artifact_dir, 'output_*_moco_*.mat');
 end
 if ~isfile(extract_mat)
     error('extract_mat not found: %s', extract_mat);
 end
 
 if isempty(movie_h5)
-    cands = dir(fullfile(artifact_dir, '*_moco_direct.h5'));
+    cands = dir(fullfile(artifact_dir, '*_moco_*.h5'));
     if numel(cands) == 1
         movie_h5 = fullfile(cands(1).folder, cands(1).name);
     end
