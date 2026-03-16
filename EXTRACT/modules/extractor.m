@@ -11,7 +11,8 @@ io_time = 0;
 
 ABS_TOL = 1e-6;
 SIGNAL_LOWER_THRESHOLD = 1e-6;
-PARTITION_SIDE_LEN = 512;
+%PARTITION_SIDE_LEN = 512;
+PARTITION_SIDE_LEN = 256;
 
 % Update config with defaults
 config = get_defaults(config);
