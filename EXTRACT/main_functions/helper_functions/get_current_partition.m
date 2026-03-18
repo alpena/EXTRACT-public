@@ -33,10 +33,14 @@ function [M_out, fov_occupation, core_occupation_local] = get_current_partition(
     y_keep = y_begin:y_end;
     
     % Get the desired block out of the movie
-    if ischar(M) || iscell(M)
+    ny = y_end - y_begin + 1;
+    nx = x_end - x_begin + 1;
+    if ischar(M) && numel(M) > 8 && strncmp(M, 'partdir:', 8)
+        % Pre-split partition HDF5: contiguous layout, single read, no lock contention.
+        part_path = fullfile(M(9:end), sprintf('partition_%03d.h5', idx));
+        M_out = h5read(part_path, '/mov', [1, 1, 1], [ny, nx, npt]);
+    elseif ischar(M) || iscell(M)
         [path, dataset] = parse_movie_name(M);
-        ny = y_end - y_begin + 1;
-        nx = x_end - x_begin + 1;
         block_t = 2048;  % align with HDF5 chunk_t for efficient reads
         t_starts = 1 : block_t : npt;
         n_blocks = numel(t_starts);
