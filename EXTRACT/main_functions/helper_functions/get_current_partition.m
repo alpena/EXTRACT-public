@@ -41,16 +41,7 @@ function [M_out, fov_occupation, core_occupation_local] = get_current_partition(
         M_out = h5read(part_path, '/mov', [1, 1, 1], [ny, nx, npt]);
     elseif ischar(M) || iscell(M)
         [path, dataset] = parse_movie_name(M);
-        block_t = 2048;  % align with HDF5 chunk_t for efficient reads
-        t_starts = 1 : block_t : npt;
-        n_blocks = numel(t_starts);
-        data_cell = cell(1, n_blocks);
-        parfor ib = 1 : n_blocks
-            t0 = t_starts(ib);
-            count_t = min(block_t, npt - t0 + 1);
-            data_cell{ib} = h5read(path, dataset, [y_begin, x_begin, t0], [ny, nx, count_t]);
-        end
-        M_out = cat(3, data_cell{:});
+        M_out = h5read(path, dataset, [y_begin, x_begin, 1], [ny, nx, npt]);
     else
         M_out = M(y_keep, x_keep, :);
     end
