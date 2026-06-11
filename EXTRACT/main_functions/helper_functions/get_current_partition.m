@@ -37,8 +37,14 @@ function [M_out, fov_occupation, core_occupation_local] = get_current_partition(
     nx = x_end - x_begin + 1;
     if ischar(M) && numel(M) > 8 && strncmp(M, 'partdir:', 8)
         % Pre-split partition HDF5: contiguous layout, single read, no lock contention.
-        part_path = fullfile(M(9:end), sprintf('partition_%03d.h5', idx));
-        M_out = h5read(part_path, '/mov', [1, 1, 1], [ny, nx, npt]);
+        part_dir = M(9:end);
+        manifest = jsondecode(fileread(fullfile(part_dir, 'manifest.json')));
+        if isfield(manifest, 'time_sharded') && manifest.time_sharded
+            M_out = read_time_sharded_partition(part_dir, manifest, idx, ny, nx, npt);
+        else
+            part_path = fullfile(part_dir, sprintf('partition_%03d.h5', idx));
+            M_out = h5read(part_path, '/mov', [1, 1, 1], [ny, nx, npt]);
+        end
     elseif ischar(M) || iscell(M)
         [path, dataset] = parse_movie_name(M);
         M_out = h5read(path, dataset, [y_begin, x_begin, 1], [ny, nx, npt]);
@@ -91,4 +97,31 @@ function [M_out, fov_occupation, core_occupation_local] = get_current_partition(
     %fprintf('\t \t \t Discarding a [%d px top, %d px bottom, %d px left, %d px right] inactive movie region. \n'...
     %    ,nz_top, nz_bottom, nz_left, nz_right);
     
+end
+
+function M_out = read_time_sharded_partition(part_dir, manifest, idx, ny, nx, npt)
+    shards = manifest.time_shards;
+    M_out = zeros(ny, nx, npt, 'single');
+    dst_start = 1;
+    remaining = npt;
+    for s = 1:numel(shards)
+        if remaining <= 0
+            break;
+        end
+        shard = shards(s);
+        shard_nt = double(shard.nt);
+        read_nt = min(remaining, shard_nt);
+        shard_part_dir = char(shard.partition_dir);
+        if ~isfolder(shard_part_dir)
+            shard_part_dir = fullfile(part_dir, shard_part_dir);
+        end
+        part_path = fullfile(shard_part_dir, sprintf('partition_%03d.h5', idx));
+        block = h5read(part_path, '/mov', [1, 1, 1], [ny, nx, read_nt]);
+        M_out(:, :, dst_start:(dst_start + read_nt - 1)) = single(block);
+        dst_start = dst_start + read_nt;
+        remaining = remaining - read_nt;
+    end
+    if remaining > 0
+        error('Time-sharded partition manifest ended before npt=%d frames were read.', npt);
+    end
 end
