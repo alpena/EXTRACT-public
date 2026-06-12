@@ -13,6 +13,9 @@ function config = get_defaults(config)
     if ~isfield(config, 'parallel_cpu'), config.parallel_cpu = false; end
     if ~isfield(config, 'multi_gpu'), config.multi_gpu = false; end
     if ~isfield(config, 'debug_gpu_memory'), config.debug_gpu_memory = false; end
+    if ~isfield(config, 'gpu_oversubscribe'), config.gpu_oversubscribe = false; end
+    if ~isfield(config, 'gpu_workers_per_device'), config.gpu_workers_per_device = 1; end
+    if ~isfield(config, 'gpu_memory_guard_gb'), config.gpu_memory_guard_gb = 6; end
     % Also set config.num_workers to avoid automatic selection
     if ~isfield(config, 'use_sparse_arrays'), config.use_sparse_arrays = false; end
     if ~isfield(config, 'compact_output'), config.compact_output = 0; end
