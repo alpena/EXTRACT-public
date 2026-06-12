@@ -98,10 +98,19 @@ if config.use_gpu && ~config.use_default_gpu && ~config.skip_parpool_calculation
         end
         if config.multi_gpu && c > 1
             avail_mem = min_mem;
-            if isfield(config, 'num_workers')
-                num_workers = min(c,config.num_workers);
-            else
-                num_workers = c;
+            [num_workers, worker_details] = resolve_extract_gpu_worker_count(c, config);
+            if worker_details.oversubscribe
+                if worker_details.was_capped
+                    warning(['Requested %d EXTRACT workers, but gpu_workers_per_device=%d ', ...
+                        'with %d GPUs allows at most %d. Using %d workers.'], ...
+                        worker_details.requested_workers, worker_details.workers_per_gpu, ...
+                        c, worker_details.max_workers, num_workers);
+                end
+                if num_workers > c
+                    dispfun(sprintf(['%s: GPU oversubscription enabled: %d workers ', ...
+                        'across %d GPUs (target %d workers/GPU). \n'], ...
+                        datestr(now), num_workers, c, worker_details.workers_per_gpu), config.verbose ~= 0);
+                end
             end
             % De-select last selected GPU
             gpuDevice([]);
@@ -114,8 +123,8 @@ if config.use_gpu && ~config.use_default_gpu && ~config.skip_parpool_calculation
             else
                 parpool('local', num_workers);    
             end
-            dispfun(sprintf('%s: Using %d GPUs \n', ...
-                datestr(now),num_workers), config.verbose ~= 0);
+            dispfun(sprintf('%s: Using %d parallel workers across %d GPUs \n', ...
+                datestr(now), num_workers, c), config.verbose ~= 0);
         else
             avail_mem = max_mem;
             if isempty(config.pick_gpu)
@@ -273,8 +282,16 @@ if config.parallel_cpu || config.multi_gpu
         config_this = config;
         if config_this.use_gpu
             [config_this, gpu_id_this, gpu_name_this] = select_extract_gpu(config_this);
-            fprintf('%s: Partition %d using GPU %d (%s)\n', ...
-                datestr(now), idx_partition, gpu_id_this, gpu_name_this);
+            gpu_mem_this = NaN;
+            if isfield(config_this, 'assigned_gpu_available_memory_gb')
+                gpu_mem_this = config_this.assigned_gpu_available_memory_gb;
+            end
+            worker_id_this = NaN;
+            if isfield(config_this, 'assigned_gpu_worker_id')
+                worker_id_this = config_this.assigned_gpu_worker_id;
+            end
+            fprintf('%s: Partition %d using GPU %d (%s), worker %g, available memory %.2f GiB\n', ...
+                datestr(now), idx_partition, gpu_id_this, gpu_name_this, worker_id_this, gpu_mem_this);
         end
         config_this.partition_id = idx_partition;
         % If S_init is given, feed only part of it consistent with partition
