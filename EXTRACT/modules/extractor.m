@@ -96,7 +96,9 @@ if config.use_gpu && ~config.use_default_gpu && ~config.skip_parpool_calculation
                 idx_max_mem = idx_gpu;
             end
         end
-        if config.multi_gpu && c > 1
+        allow_gpu_parallel = config.multi_gpu && (c > 1 || ...
+            (isfield(config, 'gpu_oversubscribe') && config.gpu_oversubscribe));
+        if allow_gpu_parallel
             avail_mem = min_mem;
             [num_workers, worker_details] = resolve_extract_gpu_worker_count(c, config);
             if worker_details.oversubscribe
