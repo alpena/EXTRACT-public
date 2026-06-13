@@ -25,8 +25,7 @@ function [S_out, l, np_x, np_y, T_corr_in, T_corr_out, S_surround] = solve_S(...
     np_y =np_x;
     % GPU partitions (forced to be >= CPU partitions)
     if use_gpu
-        d = gpuDevice();
-        avail_size = d.AvailableMemory / 4; % 32 bit precision
+        avail_size = get_effective_gpu_available_memory() / 4; % 32 bit precision
         sp_space = avail_size / GPU_SLACK_FACTOR / nt;
         np_x = max(round(sqrt(ns / sp_space)), 1);
         np_y = ceil(ns / sp_space / np_x);

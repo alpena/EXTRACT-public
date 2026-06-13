@@ -15,8 +15,7 @@ function [corr_score, scores_1, scores_2, scores_3] = ...
         [m, n] = size(M);
         if use_gpu
             GPU_SLACK_FACTOR = 3;
-            d = gpuDevice();
-            avail_size = d.AvailableMemory / 4 / GPU_SLACK_FACTOR;
+            avail_size = get_effective_gpu_available_memory() / 4 / GPU_SLACK_FACTOR;
             num_chunks = ceil(m * n / avail_size);
         else
             num_chunks = 1;
