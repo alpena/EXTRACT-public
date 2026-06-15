@@ -22,8 +22,7 @@ end
 % If using GPU, chunk data in time so that we don't run out of memory
 if use_gpu && ~is_2d
     slack_factor = 10;
-    d = gpuDevice();
-    avail_size = d.AvailableMemory / 4 / slack_factor;
+    avail_size = get_effective_gpu_available_memory() / 4 / slack_factor;
     n_chunks = ceil(t * h * w / avail_size);
     chunk_size = ceil(t / n_chunks);
 else

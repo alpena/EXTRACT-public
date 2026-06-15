@@ -22,8 +22,7 @@ function [scores_1, scores_2] = find_spurious_cells_old(S, T, M, fov_size, use_g
     if use_gpu
         [m, n] = size(M);
         GPU_SLACK_FACTOR = 2;
-        d = gpuDevice();
-        avail_size = d.AvailableMemory / 4 / GPU_SLACK_FACTOR;
+        avail_size = get_effective_gpu_available_memory() / 4 / GPU_SLACK_FACTOR;
         num_chunks = ceil(m * n / avail_size);
     else
         num_chunks = 1;

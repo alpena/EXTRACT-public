@@ -23,8 +23,7 @@ noise_std = zeros(m, 1, 'single');
 if m > 1
     if use_gpu
         slack_factor = 20;
-        d = gpuDevice();
-        avail_size = d.AvailableMemory / 4 / slack_factor;
+        avail_size = get_effective_gpu_available_memory() / 4 / slack_factor;
     else
         slack_factor = 15;
         f = get_free_mem;

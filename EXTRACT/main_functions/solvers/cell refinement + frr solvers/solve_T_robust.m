@@ -33,8 +33,7 @@ function [T_out, l, np_x, np_y, np_time] = solve_T_robust(T_in, S, M, fov_size, 
     l = {};  % If asked, keep loss in a cell array
     % Decide on space & time partitions
     if use_gpu
-        d = gpuDevice();
-        avail_size = d.AvailableMemory / 4; % 32 bit precision
+        avail_size = get_effective_gpu_available_memory() / 4; % 32 bit precision
         sp = sqrt(avail_size / GPU_SLACK_FACTOR);
         np_x = max(round(sqrt(ns / sp)), 1);
         np_y = max(ceil(sqrt(ns / sp)), 1);

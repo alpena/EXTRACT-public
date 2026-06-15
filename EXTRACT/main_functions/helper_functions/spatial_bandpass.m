@@ -67,8 +67,7 @@ bpf = maybe_gpu(use_gpu, bpf);
 % Chunk data in time so that we don't run out of memory
 if use_gpu
     slack_factor = 30;
-    d = gpuDevice();
-    avail_size = d.AvailableMemory / 4 / slack_factor;
+    avail_size = get_effective_gpu_available_memory() / 4 / slack_factor;
 else
     slack_factor = 150;
     f = get_free_mem;

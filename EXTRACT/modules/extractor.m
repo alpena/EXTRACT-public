@@ -96,7 +96,9 @@ if config.use_gpu && ~config.use_default_gpu && ~config.skip_parpool_calculation
                 idx_max_mem = idx_gpu;
             end
         end
-        if config.multi_gpu && c > 1
+        allow_gpu_parallel = config.multi_gpu && (c > 1 || ...
+            (isfield(config, 'gpu_oversubscribe') && config.gpu_oversubscribe));
+        if allow_gpu_parallel
             avail_mem = min_mem;
             [num_workers, worker_details] = resolve_extract_gpu_worker_count(c, config);
             if worker_details.oversubscribe
@@ -133,6 +135,7 @@ if config.use_gpu && ~config.use_default_gpu && ~config.skip_parpool_calculation
                 selected_gpu = config.pick_gpu;
             end
             gpuDevice(selected_gpu);
+            set_extract_gpu_memory_budget_scale(config);
             dispfun(sprintf('\t \t \t - Selecting GPU device %d \n', ...
                 selected_gpu), config.verbose ~= 0);
             config.pick_gpu = selected_gpu;
@@ -261,6 +264,7 @@ if config.parallel_cpu || config.multi_gpu
     end
 
     parfor (idx_partition = 1:num_partitions, num_workers)
+        stagger_extract_worker_start(config);
         dispfun(sprintf('%s: Signal extraction on partition %d (of %d):\n', ...
             datestr(now), idx_partition, num_partitions), config.verbose ~= 0);
         
@@ -272,7 +276,7 @@ if config.parallel_cpu || config.multi_gpu
         [M_small, fov_occupation, core_occupation_local] = get_current_partition(...
             M, npx, npy, npt, partition_overlap, idx_partition, partition_core_margin);
         time_upload(idx_partition) = posixtime(datetime) - start_upload;
-        
+
         % Sometimes partitions contain no signal. Terminate in that case
         std_M = nanstd(M_small(:));
         if std_M < SIGNAL_LOWER_THRESHOLD
